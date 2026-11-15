@@ -661,19 +661,25 @@ class SettingsDialog(SteempegDialog):
         else:
             g.addWidget(self._hint("Applies the next time Steempeg starts."))
 
+        self._pane_controls = QFrame(general)
+        self._pane_controls.setObjectName("paneWidthControls")
+        pane_controls = QVBoxLayout(self._pane_controls)
+        pane_controls.setContentsMargins(12, 10, 12, 12)
+        pane_controls.setSpacing(8)
+        g.addWidget(self._pane_controls)
         self._chk_hide_splitter_handles = SteempegCheckBox("Hide splitter handles")
         handles_hidden = load_hide_splitter_handles(settings)
         self._chk_hide_splitter_handles.setChecked(handles_hidden)
-        g.addWidget(self._chk_hide_splitter_handles)
+        pane_controls.addWidget(self._chk_hide_splitter_handles)
         if portable_shell:
             self._chk_hide_splitter_handles.setEnabled(False)
-            g.addWidget(
+            pane_controls.addWidget(
                 self._hint(
                     "Desktop only. Portable has no splitter handles to hide."
                 )
             )
         else:
-            g.addWidget(
+            pane_controls.addWidget(
                 self._hint(
                     "Hides the splitter handles and the hover queue's drag tab. "
                     "Drag the panes first, then turn this on, or set the widths below. "
@@ -729,8 +735,17 @@ class SettingsDialog(SteempegDialog):
             self._pane_spins[key] = spin
             col.addWidget(spin)
             pane_row.addWidget(column)
+        from steempeg.ui.pane_layout_editor import pencil_icon
+
+        self._pane_edit_button = QPushButton(self._pane_row_host)
+        self._pane_edit_button.setIcon(pencil_icon())
+        self._pane_edit_button.setFixedSize(38, 38)
+        self._pane_edit_button.setAccessibleName("Edit panel widths")
+        self._pane_edit_button.setToolTip("Adjust panel widths in the main window")
+        self._pane_edit_button.clicked.connect(self._edit_pane_layout)
+        pane_row.addWidget(self._pane_edit_button, 0, Qt.AlignmentFlag.AlignBottom)
         pane_row.addStretch(1)
-        g.addWidget(self._pane_row_host)
+        pane_controls.addWidget(self._pane_row_host)
         self._pane_row_host.setVisible(handles_hidden and not portable_shell)
         if portable_shell:
             for spin in self._pane_spins.values():
@@ -1736,6 +1751,7 @@ class SettingsDialog(SteempegDialog):
         from steempeg.ui import ui_theme as ut
         from steempeg.ui.widgets.setting_help import place_setting_help
 
+        place_setting_help(self._pane_controls.layout())
         for _title, _page, page_layout in self._settings_pages:
             place_setting_help(page_layout)
 
@@ -2332,6 +2348,7 @@ class SettingsDialog(SteempegDialog):
 
     def _reset_apply_baseline(self) -> None:
         """Opening Settings or a successful write starts a clean form."""
+        self._pane_layout_preview_snapshot = None
         if hasattr(self, "_applied_form_values"):
             # Pane persistence has its own change check. Advance it with the
             # general form baseline so returning to the opening percentages
@@ -2358,6 +2375,11 @@ class SettingsDialog(SteempegDialog):
         host = getattr(self, "_pane_row_host", None)
         if host is not None:
             host.setVisible(bool(checked))
+
+    def _edit_pane_layout(self) -> None:
+        from steempeg.ui.pane_layout_editor import edit_pane_layout
+
+        edit_pane_layout(self)
 
     def _pane_queue_is_hover(self) -> bool:
         """True when the queue spin edits the slide-out, not the docked pane."""
@@ -2561,6 +2583,12 @@ class SettingsDialog(SteempegDialog):
             else:
                 low, high = clamped["player"]
                 player_now = 100 - spins["clips"].value() - spins["queue"].value()
+                # Rounded pane floors can leave one extra percentage point
+                # for the player. Preserve the complement, as in hover mode;
+                # the shared pixel fitter still enforces the actual limits.
+                if player_now > high and player_now <= high + 2:
+                    high = player_now
+                    spins["player"].setRange(low, high)
                 spins["player"].setValue(max(low, min(high, player_now)))
         finally:
             self._pane_percent_lock = False
@@ -2647,6 +2675,11 @@ class SettingsDialog(SteempegDialog):
         from steempeg.ui import ui_theme as ut
         from steempeg.ui.window_chrome import _TrafficLight
 
+        palette = ut.active_palette()
+        self._pane_controls.setStyleSheet(
+            f"QFrame#paneWidthControls {{background: {palette.bg_settings_panel}; "
+            f"border: 1px solid {palette.border_card}; border-radius: 10px;}}"
+        )
         combo_qss = ut.settings_dialog_combo_stylesheet()
         for combo in self.findChildren(QComboBox):
             combo.setStyleSheet(combo_qss)
@@ -3326,6 +3359,11 @@ class SettingsDialog(SteempegDialog):
 
     def reject(self) -> None:
         self._stop_visual_preview_timers()
+        if self._pane_layout_preview_snapshot is not None:
+            from steempeg.ui.pane_layout_editor import restore_geometry
+
+            restore_geometry(self._app, self._pane_layout_preview_snapshot)
+            self._pane_layout_preview_snapshot = None
         self._restore_ui_theme_on_cancel()
         self._restore_ui_font_on_cancel()
         self._restore_icon_shape_on_cancel()
