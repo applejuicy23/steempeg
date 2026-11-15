@@ -1402,6 +1402,11 @@ class SettingsDialog(SteempegDialog):
         prio_lbl = QLabel("Priority while rendering")
         prio_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_priority = QComboBox()
+        self._combo_priority.setToolTip(
+            "CPU priority of FFmpeg while rendering; the Steempeg interface keeps its priority. "
+            "Higher priority can affect other busy applications. If the system denies "
+            "the request, rendering continues and the reason is written to the log."
+        )
         for value, label in _PRIORITY_LABELS:
             self._combo_priority.addItem(label, value)
         cur_prio = str(settings.get(KEY_RENDER_PROCESS_PRIORITY, PRIORITY_NORMAL))

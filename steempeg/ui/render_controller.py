@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from steempeg.core import capabilities
 from steempeg.infra.paths import is_frozen_build
+from steempeg.infra.render_priority import load_render_priority
 from steempeg.ui.design_tokens import ACCENT_PRIMARY
 from steempeg.ui.cq_size_estimator import cq_size_text
 from steempeg.ui.render_pro_controls import (
@@ -7605,13 +7606,9 @@ class RenderMixin:
         self._start_render_job(job, batch_mode=True)
 
     def _apply_render_performance_prefs(self) -> None:
-        """Bump process priority / pause preview for the active render (Settings)."""
+        """Pause preview if requested; CPU priority belongs to render children."""
         from steempeg.ui.settings_dialog import (
             KEY_PAUSE_PREVIEW_DURING_RENDER,
-            KEY_RENDER_PROCESS_PRIORITY,
-            PRIORITY_ABOVE,
-            PRIORITY_HIGH,
-            PRIORITY_NORMAL,
         )
 
         settings = {}
@@ -7639,25 +7636,6 @@ class RenderMixin:
         else:
             self._preview_paused_for_render = False
 
-        prio = str(settings.get(KEY_RENDER_PROCESS_PRIORITY, PRIORITY_NORMAL))
-        self._render_priority_applied = prio
-        if sys.platform == "win32" and prio in (PRIORITY_ABOVE, PRIORITY_HIGH):
-            try:
-                import ctypes
-
-                kernel32 = ctypes.windll.kernel32
-                handle = kernel32.GetCurrentProcess()
-                # ABOVE_NORMAL_PRIORITY_CLASS=0x8000, HIGH_PRIORITY_CLASS=0x80
-                cls = 0x80 if prio == PRIORITY_HIGH else 0x8000
-                kernel32.SetPriorityClass(handle, cls)
-            except Exception:
-                logging.debug("Could not raise process priority", exc_info=True)
-        elif sys.platform != "win32" and prio in (PRIORITY_ABOVE, PRIORITY_HIGH):
-            try:
-                os.nice(-5 if prio == PRIORITY_HIGH else -2)
-            except Exception:
-                logging.debug("Could not raise process nice", exc_info=True)
-
     def _restore_render_performance_prefs(self) -> None:
         if getattr(self, "_preview_paused_for_render", False):
             player = getattr(self, "player", None)
@@ -7667,18 +7645,6 @@ class RenderMixin:
                 except Exception:
                     pass
             self._preview_paused_for_render = False
-
-        if sys.platform == "win32" and getattr(self, "_render_priority_applied", "normal") != "normal":
-            try:
-                import ctypes
-
-                # NORMAL_PRIORITY_CLASS
-                ctypes.windll.kernel32.SetPriorityClass(
-                    ctypes.windll.kernel32.GetCurrentProcess(), 0x20
-                )
-            except Exception:
-                pass
-            self._render_priority_applied = "normal"
 
     def _start_render_job(self, job, batch_mode: bool = False) -> None:
         from steempeg.ui.settings_prefs import resolve_app_export_folder
@@ -7810,6 +7776,7 @@ class RenderMixin:
                 tune=params.tune,
                 keyint_frames=params.keyint_frames,
                 gpu_decode=gpu_decode,
+                process_priority=load_render_priority(self),
             )
             logging.info(
                 "PRO encode: rate=%s quality=%s two_pass=%s ten_bit=%s preset=%s tune=%s keyint=%s",

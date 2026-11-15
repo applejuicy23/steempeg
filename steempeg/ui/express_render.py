@@ -171,6 +171,7 @@ class ExpressRender(QObject):
         from steempeg.core.rendered_media import resolve_ffmpeg_exe
         from steempeg.ui.render_job_builder import resolve_render_params
         from steempeg.ui.render_thread import RenderThread
+        from steempeg.infra.render_priority import load_render_priority
         from steempeg.ui.settings_prefs import resolve_app_export_folder
 
         job = self._express_job.job
@@ -229,6 +230,7 @@ class ExpressRender(QObject):
             tune=params.tune,
             keyint_frames=params.keyint_frames,
             gpu_decode=gpu_decode,
+            process_priority=load_render_priority(self._app),
         )
         self._thread.progress_signal.connect(self._on_progress)
         self._thread.finished_signal.connect(self._on_finished)
