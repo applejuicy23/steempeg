@@ -50,6 +50,7 @@ from steempeg.ui.widgets.elided_label import ElidedLabel
 
 from steempeg.ui.widgets.gradient_slider import GradientSlider
 from steempeg.ui.widgets.toggle_switch import ToggleSwitch
+from steempeg.ui.widgets.preset_apply_button import PresetApplyButton
 
 def _font_css() -> str:
     return "font-family: " + tok.FONT_APP + ";"
@@ -1637,7 +1638,7 @@ class PresetListRow(QWidget):
         apply_lay.setContentsMargins(0, 0, 0, 0)
         apply_lay.setSpacing(0)
 
-        self._apply = QPushButton("Apply")
+        self._apply = PresetApplyButton()
         self._apply.setObjectName("PresetApplyMain")
         self._apply.setCursor(Qt.CursorShape.PointingHandCursor)
         self._apply.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -1758,7 +1759,7 @@ class StandardPresetRow(QWidget):
 
         # Solo pill — not PresetApplyMain (that QSS is the left half of Apply ▾
         # and looks like the button floated off / cut open without the menu).
-        apply_btn = QPushButton("Apply")
+        apply_btn = self._apply = PresetApplyButton()
         apply_btn.setObjectName("PresetApplySolo")
         apply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         apply_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)

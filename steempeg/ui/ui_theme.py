@@ -2185,6 +2185,10 @@ def presets_apply_solo_stylesheet() -> str:
         background-color: {c["btn_pressed_bg"]};
         border: 1px solid #b29ae7;
     }}
+    QPushButton#PresetApplySolo[presetApplied="true"] {{
+        background-color: #292236;
+        border-color: #6b5a8e;
+    }}
     """
 
 
@@ -2218,6 +2222,10 @@ def presets_apply_split_stylesheet() -> str:
         background-color: {c["btn_pressed_bg"]};
         border: 1px solid #b29ae7;
         border-right: none;
+    }}
+    QPushButton#PresetApplyMain[presetApplied="true"] {{
+        background-color: #292236;
+        border-color: #6b5a8e;
     }}
     QPushButton#PresetApplyMenu {{
         background-color: {c["btn_bg"]};

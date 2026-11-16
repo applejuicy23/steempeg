@@ -3885,6 +3885,7 @@ class RenderMixin:
     def apply_standard_quality_to_panel(self, label: str) -> None:
         """Presets manager → Apply a Standard ladder row onto Video Settings."""
         from steempeg.render.quality_presets import KIND_STANDARD, KIND_TARGET
+        from steempeg.ui.widgets.preset_apply_button import preset_apply_state
 
         label = (label or "").strip()
         if not label:
@@ -3908,6 +3909,7 @@ class RenderMixin:
                 combo.setCurrentIndex(i)
                 self.on_quality_preset_combo_changed(label)
                 self._set_preset_status(f"Applied standard “{label}” to Video Settings.")
+                preset_apply_state(self).mark(("standard", label))
                 return
         # Fallback: set by text match (Original height suffix may differ).
         idx = find_enabled_combo_text(combo, label)
@@ -3923,9 +3925,13 @@ class RenderMixin:
             self._set_preset_status(
                 f"Applied standard “{combo.itemText(idx)}” to Video Settings."
             )
+            preset_apply_state(self).mark(("standard", combo.itemText(idx)))
 
     def update_quality_options(self):
         """ Reads the clip's XML data and prepares the UI for the render settings """
+        state = getattr(self, "_preset_row_apply_state", None)
+        if state is not None:
+            state.clear()
         if getattr(self, "_library_panel_mode", "clips") == "rendered":
             previewing_rendered = (
                 hasattr(self, "_is_previewing_rendered_media")
@@ -4489,6 +4495,9 @@ class RenderMixin:
             return
         if not trim_only:
             self._revalidate_active_custom_preset()
+            state = getattr(self, "_preset_row_apply_state", None)
+            if state is not None:
+                state.revalidate()
         clip_path = self._active_preview_clip_path()
         # Queue encode stamps preview path without opening media — treat as idle.
         if not clip_path or not self._player_has_open_clip():
@@ -5549,6 +5558,10 @@ class RenderMixin:
         lst = getattr(self.ui, "preset_list", None)
         if lst is None:
             return
+        from steempeg.ui.widgets.preset_apply_button import preset_apply_state
+
+        apply_state = preset_apply_state(self)
+        apply_state.watch_settings()
         selected = self._list_selected_export_preset_name()
         search_raw = self._export_preset_search_text()
         search = search_raw.lower()
@@ -5617,6 +5630,7 @@ class RenderMixin:
                 label,
                 on_apply=self.apply_standard_quality_to_panel,
             )
+            apply_state.register(row._apply, ("standard", label))
             lst.addItem(item)
             lst.setItemWidget(item, row)
             item.setSizeHint(row.preferred_size_hint())
@@ -5650,6 +5664,7 @@ class RenderMixin:
                 on_duplicate=self.duplicate_export_preset_from_ui,
                 on_delete=self.delete_export_preset_from_ui,
             )
+            apply_state.register(row._apply, ("custom", name))
             lst.addItem(item)
             lst.setItemWidget(item, row)
             item.setSizeHint(row.preferred_size_hint())
@@ -6071,6 +6086,10 @@ class RenderMixin:
             apply_job_settings_to_ui(self, settings, refresh_summary=True)
             # Explicit apply only — never auto-check from matching UI by accident.
             self._set_active_custom_preset(preset_name)
+            from steempeg.ui.widgets.preset_apply_button import preset_apply_state
+
+            if not getattr(self, "_quality_combo_applying_custom", False):
+                preset_apply_state(self).mark(("custom", preset_name))
         finally:
             self._applying_export_preset = False
         if resolved_q != orig_q:
@@ -6101,6 +6120,9 @@ class RenderMixin:
         if combo is not None:
             combo._steempeg_active_custom_preset = key or None
         if not key:
+            state = getattr(self, "_preset_row_apply_state", None)
+            if state is not None and state.token and state.token[0] == "custom":
+                state.clear()
             return
         try:
             from steempeg.ui.render_job_builder import snapshot_settings_from_ui

@@ -50,6 +50,9 @@ def apply_job_settings_to_ui(
     summary rebuild once per field.
     """
     ui = app.ui
+    state = getattr(app, "_preset_row_apply_state", None)
+    if state is not None and not getattr(app, "_applying_export_preset", False):
+        state.clear()
     app.custom_target_bitrate = settings.custom_target_bitrate
     app.custom_target_height = settings.custom_target_height
     app.custom_target_mb = int(getattr(settings, "custom_target_mb", 0) or 0)
