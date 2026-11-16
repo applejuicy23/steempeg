@@ -6956,6 +6956,7 @@ class RenderedLibraryMixin:
             message,
             detail=detail,
             delete_label=f"🗑️ Delete ({len(paths)})" if len(paths) > 1 else "🗑️ Delete",
+            presentation="render_delete",
         ):
             return
 
