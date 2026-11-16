@@ -5,21 +5,15 @@ import os
 from enum import Enum
 
 from PySide6.QtCore import Qt, QPoint, Signal
-from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QHBoxLayout, QMenu, QPushButton
 
-from steempeg.infra.paths import get_resource_path, is_in_default_rendered_videos
-from steempeg.render.queue import RenderJob
-from steempeg.render.queue_display import format_job_output, format_job_preset, format_job_trim
-from steempeg.ui import design_tokens as tok
+from steempeg.infra.paths import is_in_default_rendered_videos
+from steempeg.render.queue import JobStatus, RenderJob
+from steempeg.render.queue_display import format_job_output
 from steempeg.ui import ui_theme as ut
-from steempeg.ui.queue_card_shared import _FONT, set_game_icon_label
-from steempeg.ui.widgets import ElidedLabel, SteempegCheckBox
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.play_video_button import PlayVideoSplitButton
-
-_MASCOT_H = 110
-
+from steempeg.ui.render_result_widgets import ExportResultCard, ResultHeader
 
 class RenderCompleteChoice(Enum):
     OK = "ok"
@@ -27,18 +21,6 @@ class RenderCompleteChoice(Enum):
     PLAY = "play"
     OPEN_HISTORY = "history"
     OPEN_IN_STEEMPEG = "steempeg"
-
-
-def _success_mascot() -> QLabel:
-    lbl = QLabel()
-    lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
-    lbl.setStyleSheet("background: transparent; border: none;")
-    pix = QPixmap(get_resource_path("chupisuccess.png"))
-    if not pix.isNull():
-        lbl.setPixmap(pix.scaledToHeight(_MASCOT_H, Qt.TransformationMode.SmoothTransformation))
-        lbl.setFixedWidth(lbl.pixmap().width())
-        lbl.setFixedHeight(_MASCOT_H)
-    return lbl
 
 
 class RenderCompleteDialog(SteempegDialog):
@@ -54,7 +36,11 @@ class RenderCompleteDialog(SteempegDialog):
         bg_color: str | None = None,
         show_clear_queue: bool = False,
         always_clear_queue: bool = True,
+        cache_dir: str | None = None,
+        elapsed_seconds: float | None = None,
     ):
+        # Legacy cleanup arguments are accepted for older callers; the choice
+        # is no longer shown and completion always removes its queue entries.
         super().__init__("Render complete", parent, bar_color=bar_color, bg_color=bg_color)
         from steempeg.ui.ui_density import scaled_dialog_size
 
@@ -64,84 +50,14 @@ class RenderCompleteDialog(SteempegDialog):
         self.resize(rw, rh)
         self._choice = RenderCompleteChoice.OK
         self._output_file = output_file or ""
-        self._show_clear_queue = bool(show_clear_queue)
 
-        body_row = QHBoxLayout()
-        body_row.setSpacing(18)
-        body_row.addWidget(_success_mascot(), 0, Qt.AlignmentFlag.AlignVCenter)
-
-        header_text = QVBoxLayout()
-        header_text.setSpacing(6)
-        header_text.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        heading = QLabel("Clip exported successfully")
-        heading.setStyleSheet(
-            f"color: {tok.TEXT_TITLE}; font-family: {tok.FONT_SEMIBOLD}; "
-            "font-size: 16px; font-weight: 700; background: transparent;"
-        )
-        header_text.addWidget(heading)
-        summary = QLabel("Your video is ready")
-        summary.setStyleSheet(
-            f"color: #b29ae7; font-size: 13px; background: transparent; {_FONT}"
-        )
-        header_text.addWidget(summary)
-        body_row.addLayout(header_text, 1)
-        self.content_layout.addLayout(body_row)
-
-        result_card = QFrame()
-        result_card.setObjectName("renderResultCard")
-        result_card.setStyleSheet(ut.render_result_card_stylesheet("renderResultCard"))
-        details = QVBoxLayout(result_card)
-        details.setContentsMargins(14, 12, 14, 12)
-        details.setSpacing(8)
-
-        title_row = QHBoxLayout()
-        title_row.setSpacing(10)
-        game_icon = QLabel()
-        set_game_icon_label(game_icon, job, size=28)
-        title_col = QVBoxLayout()
-        title_col.setSpacing(2)
-        game_name = job.game_name.strip() or os.path.basename(job.clip_path or "Clip")
-        name_lbl = QLabel(game_name)
-        name_lbl.setStyleSheet(
-            f"color: {tok.TEXT_TITLE}; font-size: 14px; font-weight: 600; background: transparent; {_FONT}"
-        )
-        preset_lbl = QLabel(format_job_preset(job.settings))
-        preset_lbl.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px; background: transparent; {_FONT}")
-        title_col.addWidget(name_lbl)
-        title_col.addWidget(preset_lbl)
-        title_row.addWidget(game_icon, 0, Qt.AlignmentFlag.AlignTop)
-        title_row.addLayout(title_col, 1)
-        details.addLayout(title_row)
-        source_date = " ".join(part for part in (job.clip_date, job.clip_time) if part)
-        if source_date:
-            date_lbl = QLabel(source_date)
-            date_lbl.setStyleSheet(
-                f"color: {tok.TEXT_MUTED}; font-size: 11px; background: transparent; {_FONT}"
-            )
-            details.addWidget(date_lbl)
-
-        trim_text = format_job_trim(job.settings)
-        if trim_text != "Full clip":
-            trim_lbl = QLabel(trim_text)
-            trim_lbl.setStyleSheet(f"color: #b29ae7; font-size: 11px; background: transparent; {_FONT}")
-            details.addWidget(trim_lbl)
-
+        self._result_header = ResultHeader("Clip exported successfully", "Your video is ready",
+                                           elapsed_seconds=elapsed_seconds)
+        self.content_layout.addWidget(self._result_header)
         out_path = output_file or format_job_output(job)
-        path_lbl = ElidedLabel(f"📁 {out_path}")
-        path_lbl.setToolTip(out_path)
-        path_lbl.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px; background: transparent; {_FONT}")
-        details.addWidget(path_lbl)
-
-        self.content_layout.addWidget(result_card)
-
-        self._chk_clear_queue = None
-        if self._show_clear_queue:
-            self._chk_clear_queue = SteempegCheckBox(
-                "Remove from render queue"
-            )
-            self._chk_clear_queue.setChecked(bool(always_clear_queue))
-            self.content_layout.addWidget(self._chk_clear_queue)
+        self._result_card = ExportResultCard(job, output_file=out_path, cache_dir=cache_dir,
+                                            status=JobStatus.COMPLETED)
+        self.content_layout.addWidget(self._result_card)
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
@@ -170,6 +86,8 @@ class RenderCompleteDialog(SteempegDialog):
         actions.addWidget(play_split, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.content_layout.addLayout(actions)
+        self._footer_buttons = (btn_history, btn_ok, btn_folder)
+        self._play_split = play_split
         # Fit the actual font and shared button padding without a spare gap.
         self.ensurePolished()
         self.content_layout.activate()
@@ -180,6 +98,14 @@ class RenderCompleteDialog(SteempegDialog):
         fitted_width = row_width + content.left() + content.right() + body.left() + body.right()
         self.setMinimumWidth(fitted_width)
         self.resize(fitted_width, self.minimumSizeHint().height())
+
+    def apply_ui_theme_chrome(self) -> None:
+        super().apply_ui_theme_chrome()
+        self._result_header.apply_theme()
+        self._result_card.apply_theme()
+        for button in self._footer_buttons:
+            button.setStyleSheet(ut.about_secondary_button_stylesheet())
+        self._play_split.apply_ui_theme_chrome()
 
     def _setup_play_menu(self, play_split: PlayVideoSplitButton, output_file: str) -> None:
         in_library = is_in_default_rendered_videos(output_file)
@@ -229,6 +155,5 @@ class RenderCompleteDialog(SteempegDialog):
         return self._choice
 
     def clear_queue(self) -> bool:
-        if self._chk_clear_queue is None:
-            return False
-        return self._chk_clear_queue.isChecked()
+        """Compatibility for older callers; completed queue entries always clear."""
+        return True
