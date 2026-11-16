@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import sys
+import time
 
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
 from PySide6.QtGui import QFontMetrics, QPixmap
@@ -7571,6 +7572,8 @@ class RenderMixin:
         self._batch_total = pending
         self._batch_current = 0
         self._batch_started_at = _utc_now_iso()
+        self._batch_started_monotonic = time.monotonic()
+        self._last_batch_elapsed_sec = None
         self._flush_current_trim_state()
         self._sync_ui_to_selected_job()
         set_settings_panel_locked(self, True)
@@ -7791,9 +7794,12 @@ class RenderMixin:
             )
             self.render_thread.progress_signal.connect(self._on_render_progress)
             self.render_thread.finished_signal.connect(self.on_render_finished)
+            self._render_started_monotonic = time.monotonic()
+            self._last_render_elapsed_sec = None
             self.render_thread.start()
         except Exception as e:
             logging.error(f"Thread Start Error: {e}")
+            self._render_started_monotonic = None
             self._is_rendering = False
             self._active_render_job = None
             if not getattr(self, '_queue_batch_active', False):
@@ -7864,6 +7870,9 @@ class RenderMixin:
         self._clear_queue_selection()
 
     def _finish_queue_batch(self) -> None:
+        started = getattr(self, "_batch_started_monotonic", None)
+        self._last_batch_elapsed_sec = max(0.0, time.monotonic() - started) if started is not None else None
+        self._batch_started_monotonic = None
         self._queue_batch_active = False
         self._restore_render_performance_prefs()
         set_settings_panel_locked(self, False)
@@ -7915,6 +7924,8 @@ class RenderMixin:
         self._show_batch_complete_dialog(jobs=jobs)
 
     def _stop_queue_batch(self, cancelled: bool = False) -> None:
+        self._batch_started_monotonic = None
+        self._last_batch_elapsed_sec = None
         self._archive_batch_to_history(cancelled=cancelled)
         self._queue_batch_active = False
         self._restore_render_performance_prefs()
@@ -8186,6 +8197,9 @@ class RenderMixin:
 
     def on_render_finished(self, success, error_msg, output_file):
         """ Fires when the background rendering thread exits. """
+        started = getattr(self, "_render_started_monotonic", None)
+        self._last_render_elapsed_sec = max(0.0, time.monotonic() - started) if started is not None else None
+        self._render_started_monotonic = None
         # Source-gone abort kills FFmpeg via cancel(); remap to ERROR so the job
         # is not quietly put back to QUEUED like a user Cancel.
         override = getattr(self, "_pending_render_error_override", None)
