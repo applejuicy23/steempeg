@@ -1,6 +1,7 @@
 """Two-column Quality Preset popup — same chrome as Bitrate combo, two columns."""
 from __future__ import annotations
 
+
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -83,6 +84,10 @@ class QualityPresetDualPopup(QFrame):
         self._owner = combo.window()
         combo.installEventFilter(self)
         self._owner.installEventFilter(self)
+        # Keep this registration stable while handling a press. Removing an
+        # application filter from the nested Hide event can let the original
+        # press continue to the combo and reopen the popup on Windows.
+        QApplication.instance().installEventFilter(self)
         QApplication.instance().applicationStateChanged.connect(self._application_state_changed)
         self.setObjectName("QualityPresetDualPopup")
         c = _combo_colors()
@@ -110,11 +115,29 @@ class QualityPresetDualPopup(QFrame):
         self._right["list"].itemClicked.connect(self._on_pick)
         self._deck_column = "left"
 
+
     def _application_state_changed(self, state) -> None:
         if state != Qt.ApplicationState.ApplicationActive:
             self.hide()
 
     def eventFilter(self, obj, event):  # noqa: N802
+        if (
+            self.isVisible()
+            and event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick)
+            and event.button() == Qt.MouseButton.LeftButton
+            and self._combo.rect().contains(
+                self._combo.mapFromGlobal(event.globalPosition().toPoint())
+            )
+        ):
+            # Native popup routing can send the opener press to its window,
+            # a child, or the combo. Consume it before QComboBox can reopen.
+            self.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay, True)
+            stamp = event.timestamp()
+            if stamp:
+                self._combo._steempeg_quality_handled_press = (stamp, event.button())
+            self.hide()
+            event.accept()
+            return True
         if obj in (self._combo, self._owner):
             if event.type() in (QEvent.Type.Hide, QEvent.Type.Close):
                 self.hide()
@@ -124,7 +147,13 @@ class QualityPresetDualPopup(QFrame):
 
     def event(self, event):
         if event.type() == QEvent.Type.WindowDeactivate:
-            self.hide()
+            # Deck's popup hold promotes this window to Tool. Clicking its
+            # opener activates the owner before the mouse press arrives.
+            # Keep it visible until that press can toggle it closed. Outside
+            # clicks are handled by the hold filter; leaving the application
+            # is handled by applicationStateChanged.
+            if self.windowType() != Qt.WindowType.Tool:
+                self.hide()
         return super().event(event)
 
     def mousePressEvent(self, event):  # noqa: N802
@@ -226,6 +255,7 @@ class QualityPresetDualPopup(QFrame):
             self._deck_column = "left"
 
     def present(self) -> None:
+        self.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay, False)
         # Render Settings can borrow this same combo into a floating dialog.
         owner = self._combo.window()
         if owner is not self._owner:
@@ -293,7 +323,8 @@ class QualityPresetDualPopup(QFrame):
         self.show()
         self._steempeg_popup_opener = combo
         self.raise_()
-        self.activateWindow()
+        if self.windowType() != Qt.WindowType.Tool:
+            self.activateWindow()
 
     def deck_navigate(self, button_name: str) -> bool:
         """Move the highlight. The combo value changes only on A.
@@ -381,11 +412,13 @@ class QualityPresetDualPopup(QFrame):
         combo = self._combo
         idx = int(idx)
         prev = combo.currentIndex()
+        # Release the popup grab before selection callbacks rebuild settings
+        # or open another combo/dialog.
+        self.hide()
         combo.setCurrentIndex(idx)
         text = combo.currentText()
         if idx == prev:
             combo.currentTextChanged.emit(text)
-        self.hide()
         try:
             combo.activated.emit(idx)
         except Exception:
@@ -394,6 +427,36 @@ class QualityPresetDualPopup(QFrame):
 
 class DualColumnQualityCombo(QComboBox):
     """QComboBox whose dropdown is Standard | Custom side-by-side."""
+
+    def mousePressEvent(self, event):  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            popup = getattr(self, "_steempeg_dual_popup", None)
+            stamp = event.timestamp()
+            press = (stamp, event.button())
+            if stamp and getattr(self, "_steempeg_quality_handled_press", None) == press:
+                # Windows can deliver a QWindow press and then a QWidget
+                # double-click for that same physical press, even after the
+                # application filter consumed the first event.
+                event.accept()
+                return
+            if stamp:
+                self._steempeg_quality_handled_press = press
+            if self.isEnabled():
+                self.setFocus(Qt.FocusReason.MouseFocusReason)
+                self.showPopup()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):  # noqa: N802
+        # A fast second click arrives as a double-click, not another press.
+        self.mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def showPopup(self) -> None:
         popup = getattr(self, "_steempeg_dual_popup", None)
