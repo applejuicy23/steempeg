@@ -90,6 +90,7 @@ class SteempegMessageDialog(SteempegDialog):
         buttons: tuple[DialogButton, ...] = (DialogButton("OK", "primary", accept=True),),
         rich_text: bool = False,
         min_width: int = 380,
+        presentation: str | None = None,
         **theme_kwargs,
     ):
         if not theme_kwargs.get("bar_color"):
@@ -100,6 +101,12 @@ class SteempegMessageDialog(SteempegDialog):
         scaled_w, _ = scaled_dialog_size(min_width, 200, parent=parent)
         self.setMinimumWidth(scaled_w)
         self._clicked_index = -1
+
+        if presentation is not None:
+            from steempeg.ui.render_notice_content import build_render_notice
+
+            build_render_notice(self, presentation, message, detail, buttons)
+            return
 
         body = QLabel(message)
         body.setWordWrap(True)
@@ -146,6 +153,13 @@ class SteempegMessageDialog(SteempegDialog):
     def clicked_index(self) -> int:
         return self._clicked_index
 
+    def apply_ui_theme_chrome(self) -> None:
+        super().apply_ui_theme_chrome()
+        if getattr(self, "_render_notice_kind", None) is not None:
+            from steempeg.ui.render_notice_content import refresh_render_notice_theme
+
+            refresh_render_notice_theme(self)
+
 
 def _show(
     parent,
@@ -156,6 +170,7 @@ def _show(
     buttons: tuple[DialogButton, ...],
     rich_text: bool = False,
     min_width: int = 380,
+    presentation: str | None = None,
 ) -> int:
     dlg = SteempegMessageDialog(
         title,
@@ -165,18 +180,20 @@ def _show(
         buttons=buttons,
         rich_text=rich_text,
         min_width=min_width,
+        presentation=presentation,
     )
     dlg.exec()
     return dlg.clicked_index
 
 
-def steempeg_information(parent, title: str, message: str, *, detail: str | None = None) -> None:
+def steempeg_information(parent, title: str, message: str, *, detail: str | None = None, presentation: str | None = None) -> None:
     _show(
         parent,
         title,
         message,
         detail=detail,
         buttons=(DialogButton("OK", "primary", accept=True),),
+        presentation=presentation,
     )
 
 
@@ -187,6 +204,7 @@ def steempeg_information_dont_ask(
     *,
     detail: str | None = None,
     checkbox_label: str = "Don't ask again",
+    presentation: str | None = None,
 ) -> bool:
     """Info dialog with a dismiss checkbox. Returns True if the checkbox was checked on OK."""
     theme = dialog_theme(parent)
@@ -196,6 +214,7 @@ def steempeg_information_dont_ask(
         parent,
         detail=detail,
         buttons=(DialogButton("OK", "primary", accept=True),),
+        presentation=presentation,
         **theme,
     )
     from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
@@ -203,6 +222,10 @@ def steempeg_information_dont_ask(
     chk = SteempegCheckBox(checkbox_label)
     # Insert above the action row (last layout item).
     dlg.content_layout.insertWidget(dlg.content_layout.count() - 1, chk)
+    if presentation is not None:
+        from steempeg.ui.render_notice_content import fit_render_notice
+
+        fit_render_notice(dlg)
     dlg.exec()
     return bool(chk.isChecked())
 
@@ -247,12 +270,14 @@ def steempeg_confirm_delete(
     *,
     detail: str | None = None,
     delete_label: str = "🗑️ Delete",
+    presentation: str | None = None,
 ) -> bool:
     return _show(
         parent,
         title,
         message,
         detail=detail,
+        presentation=presentation,
         buttons=(
             DialogButton("Cancel", "secondary"),
             DialogButton(delete_label, "danger", accept=True),
