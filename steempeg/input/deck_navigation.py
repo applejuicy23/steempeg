@@ -94,8 +94,9 @@ def _popup_window(widget: QObject) -> QWidget | None:
 
 def _popup_is_tool(window: QWidget) -> bool:
     """True after the list has been taken off the Qt.Popup flag."""
-    flags = window.windowFlags()
-    return bool(flags & Qt.WindowType.Tool) and not bool(flags & Qt.WindowType.Popup)
+    # Window types are enum values, not independent bits (Tool=11, Popup=9).
+    # Bit tests incorrectly classified Tool as Popup and repinned every Show.
+    return window.windowType() == Qt.WindowType.Tool
 
 
 def _queue_pin_combo_popup(widget: QObject) -> None:
