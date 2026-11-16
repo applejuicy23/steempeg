@@ -5451,6 +5451,7 @@ class RenderMixin:
             "Render Queue",
             message,
             checkbox_label="Don't ask again",
+            presentation="queue_duplicate",
         )
         if dont_ask:
             self.save_user_settings("render_queue_duplicate_notice_dismissed", True)
@@ -7950,7 +7951,7 @@ class RenderMixin:
         self._canceled_plaque_active = True
         try:
             self.update_playback_badge()
-            steempeg_information(self.ui, title, message)
+            steempeg_information(self.ui, title, message, presentation="render_cancelled")
         finally:
             self._canceled_plaque_active = False
             self.update_playback_badge()
