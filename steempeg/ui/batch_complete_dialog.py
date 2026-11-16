@@ -5,36 +5,25 @@ import os
 from enum import Enum
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
-    QLabel,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
-from steempeg.infra.paths import get_resource_path, reveal_in_file_manager
-from steempeg.render.queue import JobStatus, RenderJob, STATUS_COLORS, job_to_dict
-from steempeg.render.queue_display import format_job_output, format_job_preset, format_job_trim
+from steempeg.infra.paths import reveal_in_file_manager
+from steempeg.render.queue import JobStatus, RenderJob, job_to_dict
 from steempeg.ui import design_tokens as tok
 from steempeg.ui import ui_theme as ut
-from steempeg.ui.icon_assets import close_clip_icon, load_icon
-from steempeg.ui.queue_card_shared import _FONT, set_game_icon_label
-from steempeg.ui.widgets import ElidedLabel, SteempegCheckBox
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
+from steempeg.ui.render_result_widgets import ExportResultCard, ResultHeader
 
 def _result_action_style() -> str:
     """Use the same action buttons as Settings General Browse / Reset."""
     return ut.settings_dialog_secondary_button_stylesheet()
-
-
-_MASCOT_H = 120
-_JOB_TITLE_ICON = 22
-_STATUS_ICON = 14
-_FONT_SEMIBOLD = f"font-family: {tok.FONT_APP}; font-weight: 600;"
 
 
 class BatchCompleteChoice(Enum):
@@ -56,45 +45,7 @@ def _batch_heading_summary(jobs: list[RenderJob]) -> tuple[str, str]:
         parts.append(f"{done} exported")
     if failed:
         parts.append(f"{failed} failed")
-    return "Batch render complete", " · ".join(parts)
-
-
-def _mascot_label(*, success: bool) -> QLabel:
-    lbl = QLabel()
-    lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
-    lbl.setStyleSheet("background: transparent; border: none;")
-    asset = "chupisuccess.png" if success else "saderror.png"
-    pix = QPixmap(get_resource_path(asset))
-    if not pix.isNull():
-        lbl.setPixmap(pix.scaledToHeight(_MASCOT_H, Qt.TransformationMode.SmoothTransformation))
-        lbl.setFixedWidth(lbl.pixmap().width())
-        lbl.setFixedHeight(_MASCOT_H)
-    return lbl
-
-
-def _status_badge(status: JobStatus) -> QWidget:
-    host = QWidget()
-    host.setStyleSheet("background: transparent; border: none;")
-    row = QHBoxLayout(host)
-    row.setContentsMargins(0, 0, 0, 0)
-    row.setSpacing(4)
-    icon = QLabel()
-    icon.setFixedSize(_STATUS_ICON, _STATUS_ICON)
-    icon.setStyleSheet("background: transparent; border: none;")
-    if status == JobStatus.COMPLETED:
-        icon.setPixmap(load_icon("success.png", _STATUS_ICON).pixmap(_STATUS_ICON, _STATUS_ICON))
-    elif status == JobStatus.ERROR:
-        icon.setPixmap(close_clip_icon(_STATUS_ICON).pixmap(_STATUS_ICON, _STATUS_ICON))
-    else:
-        icon.hide()
-    color = STATUS_COLORS.get(status, "#888888")
-    text = QLabel(status.value.capitalize())
-    text.setStyleSheet(
-        f"color: {color}; font-size: 10px; font-weight: bold; {_FONT} background: transparent;"
-    )
-    row.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
-    row.addWidget(text, 0, Qt.AlignmentFlag.AlignVCenter)
-    return host
+    return "Batch render complete", " | ".join(parts)
 
 
 class BatchCompleteDialog(SteempegDialog):
@@ -110,37 +61,26 @@ class BatchCompleteDialog(SteempegDialog):
         bar_color: str | None = None,
         bg_color: str | None = None,
         always_clear_queue: bool = True,
+        cache_dir: str | None = None,
+        elapsed_seconds: float | None = None,
     ):
+        # Retain the legacy keyword for older callers, without an opt-out UI.
         super().__init__("Batch render complete", parent, bar_color=bar_color, bg_color=bg_color)
         from steempeg.ui.ui_density import scaled_dialog_size
 
         mw, mh = scaled_dialog_size(520, 420, parent=parent)
-        rw, rh = scaled_dialog_size(580, 560, parent=parent)
+        rw, rh = scaled_dialog_size(640, 640, parent=parent)
         self.setMinimumSize(mw, mh)
         self.resize(rw, rh)
         self._choice = BatchCompleteChoice.OK
-        self.setStyleSheet(self.styleSheet() + ut.render_result_card_stylesheet())
+        self._cache_dir = cache_dir
 
         done = sum(1 for j in jobs if j.status == JobStatus.COMPLETED)
         heading_text, summary_text = _batch_heading_summary(jobs)
 
-        header_row = QHBoxLayout()
-        header_row.setSpacing(16)
-        header_row.addWidget(_mascot_label(success=done > 0), 0, Qt.AlignmentFlag.AlignTop)
-
-        header_text = QVBoxLayout()
-        header_text.setSpacing(6)
-        heading = QLabel(heading_text)
-        heading.setStyleSheet(
-            f"color: {tok.TEXT_TITLE}; font-family: {tok.FONT_SEMIBOLD}; "
-            "font-size: 16px; font-weight: 700; background: transparent;"
-        )
-        summary = QLabel(summary_text)
-        summary.setStyleSheet(f"color: #b29ae7; font-size: 13px; font-weight: 600; background: transparent; {_FONT}")
-        header_text.addWidget(heading)
-        header_text.addWidget(summary)
-        header_row.addLayout(header_text, 1)
-        self.content_layout.addLayout(header_row)
+        self._result_header = ResultHeader(heading_text, summary_text, success=done > 0,
+                                           elapsed_seconds=elapsed_seconds)
+        self.content_layout.addWidget(self._result_header)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -160,17 +100,15 @@ class BatchCompleteDialog(SteempegDialog):
         host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         host.setStyleSheet(f"QWidget#batchResultsHost {{ background-color: {self._bg_color}; }}")
         host_layout = QVBoxLayout(host)
-        host_layout.setContentsMargins(0, 4, 0, 0)
+        host_layout.setContentsMargins(0, 0, 0, 0)
         host_layout.setSpacing(8)
         for job in jobs:
             host_layout.addWidget(self._build_job_row(job))
         host_layout.addStretch()
         scroll.setWidget(host)
         self.content_layout.addWidget(scroll, 1)
-
-        self._chk_clear_queue = SteempegCheckBox("Always clear render queue after render")
-        self._chk_clear_queue.setChecked(bool(always_clear_queue))
-        self.content_layout.addWidget(self._chk_clear_queue)
+        self._results_scroll = scroll
+        self._results_host = host
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
@@ -190,6 +128,21 @@ class BatchCompleteDialog(SteempegDialog):
         actions.addWidget(btn_ok)
 
         self.content_layout.addLayout(actions)
+        self._footer_buttons = (btn_history, btn_ok)
+
+    def apply_ui_theme_chrome(self) -> None:
+        super().apply_ui_theme_chrome()
+        self._result_header.apply_theme()
+        for card in self.findChildren(ExportResultCard):
+            card.apply_theme()
+            for button in card.findChildren(QPushButton):
+                button.setStyleSheet(_result_action_style())
+        self._footer_buttons[0].setStyleSheet(ut.about_secondary_button_stylesheet())
+        self._footer_buttons[1].setStyleSheet(ut.about_accent_button_stylesheet())
+        tok.apply_dialog_scroll_bg(self._results_scroll, self._bg_color)
+        from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
+        self._results_scroll.setStyleSheet(tok.dialog_scroll_stylesheet(self._bg_color) + LIBRARY_SCROLLBAR_VERTICAL)
+        self._results_host.setStyleSheet(f"QWidget#batchResultsHost {{background-color: {self._bg_color};}}")
 
     def _pick(self, choice: BatchCompleteChoice) -> None:
         self._choice = choice
@@ -199,71 +152,29 @@ class BatchCompleteDialog(SteempegDialog):
         return self._choice
 
     def always_clear_queue(self) -> bool:
-        return self._chk_clear_queue.isChecked()
+        """Compatibility for older callers; completed batches always clear."""
+        return True
 
     def _build_job_row(self, job: RenderJob) -> QFrame:
-        frame = QFrame()
-        frame.setObjectName("jobFrame")
-        frame.setStyleSheet(ut.render_result_card_stylesheet())
-        row = QVBoxLayout(frame)
-        row.setContentsMargins(10, 8, 10, 8)
-        row.setSpacing(3)
-
-        title_line = QHBoxLayout()
-        title_line.setSpacing(8)
-        game_icon = QLabel()
-        set_game_icon_label(game_icon, job, size=_JOB_TITLE_ICON)
-        name = QLabel(job.game_name.strip() or os.path.basename(job.clip_path))
-        name.setStyleSheet(
-            f"color: #f0f0f0; font-size: 13px; {_FONT_SEMIBOLD} background: transparent;"
-        )
-        badge = _status_badge(job.status)
-        title_line.addWidget(game_icon, 0, Qt.AlignmentFlag.AlignVCenter)
-        title_line.addWidget(name, 1, Qt.AlignmentFlag.AlignVCenter)
-        title_line.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
-        row.addLayout(title_line)
-
-        meta = QLabel(
-            f"{job.clip_date} {job.clip_time}  •  {format_job_preset(job.settings)}"
-        )
-        meta.setStyleSheet(f"color: #888888; font-size: 11px; {_FONT}")
-        row.addWidget(meta)
-
-        trim = format_job_trim(job.settings)
-        if trim != "Full clip":
-            trim_lbl = QLabel(trim)
-            trim_lbl.setStyleSheet(f"color: #b29ae7; font-size: 11px; {_FONT}")
-            row.addWidget(trim_lbl)
-
-        out_path = job.output_file or format_job_output(job)
-        file_exists = bool(out_path and os.path.isfile(out_path))
-        path_color = "#999999" if file_exists else "#666666"
-        path_suffix = "" if file_exists or not out_path else "  (file deleted)"
-        out_lbl = ElidedLabel(f"📁 {out_path}{path_suffix}")
-        out_lbl.setToolTip(out_path)
-        out_lbl.setStyleSheet(f"color: {path_color}; font-size: 11px; {_FONT}")
-        row.addWidget(out_lbl)
-
-        if job.error_message and job.status == JobStatus.ERROR:
-            err = ElidedLabel(job.error_message[:120])
-            err.setToolTip(job.error_message)
-            err.setStyleSheet(f"color: #ff8888; font-size: 10px; {_FONT}")
-            row.addWidget(err)
+        frame = ExportResultCard(job, cache_dir=self._cache_dir)
+        row = frame.body
+        out_path = frame.output_path
+        file_exists = frame.file_exists
 
         if file_exists and job.status == JobStatus.COMPLETED:
             btn_row = QHBoxLayout()
             btn_row.setContentsMargins(0, 8, 0, 0)
             btn_row.setSpacing(8)
             btn_row.addStretch()
-            btn_folder = QPushButton("Open folder")
+            btn_folder = QPushButton("📂  Open folder")
             btn_folder.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_folder.setStyleSheet(_result_action_style())
             btn_folder.clicked.connect(lambda _=False, p=out_path: reveal_in_file_manager(p))
-            btn_open = QPushButton("Open file")
+            btn_open = QPushButton("▶️  Open file")
             btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_open.setStyleSheet(_result_action_style())
             btn_open.clicked.connect(lambda _=False, p=out_path: self.open_output_requested.emit(p))
-            btn_library = QPushButton("Rendered videos")
+            btn_library = QPushButton("🎬  Rendered videos")
             btn_library.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_library.setStyleSheet(_result_action_style())
             btn_library.clicked.connect(
