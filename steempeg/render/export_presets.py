@@ -255,7 +255,7 @@ def _short_audio(settings: RenderJobSettings) -> str:
         br = (settings.audio_bitrate_text or "").strip()
         if br and fmt not in ("FLAC", "WAV", "Copy"):
             match = re.search(r"(\d+)", br)
-            return f"{fmt} only · {match.group(1)}k" if match else f"{fmt} only"
+            return f"{fmt} only | {match.group(1)}k" if match else f"{fmt} only"
         return f"{fmt} only"
     if fmt in ("FLAC", "WAV", "Copy"):
         return fmt
@@ -291,7 +291,7 @@ def _short_pro(settings: RenderJobSettings) -> list[str]:
 
 
 def format_preset_summary(settings: RenderJobSettings | dict[str, Any] | None) -> str:
-    """Readable recipe line: container · codec · res · bitrate · audio."""
+    """Readable recipe line: container | codec | res | bitrate | audio."""
     if isinstance(settings, dict):
         settings = preset_dict_to_settings(settings)
     if settings is None:
@@ -299,7 +299,7 @@ def format_preset_summary(settings: RenderJobSettings | dict[str, Any] | None) -
 
     if settings.audio_only:
         container = (settings.container_format or "").strip() or "Audio"
-        return " · ".join(p for p in (container, _short_audio(settings)) if p)
+        return " | ".join(p for p in (container, _short_audio(settings)) if p)
 
     parts: list[str] = []
     container = (settings.container_format or "").strip()
@@ -326,7 +326,7 @@ def format_preset_summary(settings: RenderJobSettings | dict[str, Any] | None) -
     if audio:
         parts.append(audio)
 
-    return " · ".join(parts) if parts else "—"
+    return " | ".join(parts) if parts else "—"
 
 
 def save_preset(

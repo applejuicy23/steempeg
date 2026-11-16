@@ -1748,9 +1748,9 @@ class StandardPresetRow(QWidget):
         name_lbl.setStyleSheet(self._NAME_QSS)
         name_col.addWidget(name_lbl)
         if "Target File Size" in (label or ""):
-            hint_text = "Built-in · custom-standard"
+            hint_text = "Built-in | custom-standard"
         else:
-            hint_text = "Built-in · not editable"
+            hint_text = "Built-in | not editable"
         hint = QLabel(hint_text)
         hint.setStyleSheet(self._HINT_QSS)
         name_col.addWidget(hint)
