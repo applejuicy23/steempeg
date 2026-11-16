@@ -1994,28 +1994,23 @@ class RenderMixin:
         jobs = list(jobs if jobs is not None else self.render_queue.jobs)
         if not jobs:
             return
-        always_clear = bool(
-            self.load_user_settings().get("always_clear_render_queue_after_batch", True)
-        )
         parent = self.ui.window() if hasattr(self.ui, "window") else self.ui
         dlg = BatchCompleteDialog(
             jobs,
             parent=parent,
-            always_clear_queue=always_clear,
+            cache_dir=getattr(self, "cache_dir", None),
+            elapsed_seconds=getattr(self, "_last_batch_elapsed_sec", None),
         )
         dlg.open_output_requested.connect(self.open_rendered_file)
         dlg.open_in_rendered_requested.connect(self.open_in_rendered_videos)
         dlg.open_source_clip_requested.connect(self.open_source_clip)
-        if always_clear:
-            self._clear_render_queue_silent()
+        # History is archived before this window; completed batches always leave the queue.
+        self._clear_render_queue_silent()
         accepted = dlg.exec() == QDialog.DialogCode.Accepted
-        self.save_user_settings("always_clear_render_queue_after_batch", dlg.always_clear_queue())
         if not accepted:
             return
         if dlg.choice() == BatchCompleteChoice.OPEN_HISTORY:
             self.show_render_queue_history()
-        elif dlg.always_clear_queue():
-            self._clear_render_queue_silent()
 
     def _show_render_complete_dialog(self, job, output_file: str) -> None:
         from steempeg.ui.render_complete_dialog import RenderCompleteChoice, RenderCompleteDialog
@@ -2026,31 +2021,20 @@ class RenderMixin:
             if clip_path and hasattr(self, "render_queue")
             else []
         )
-        show_clear = bool(queue_rows)
-        always_clear = bool(
-            self.load_user_settings().get("always_clear_render_queue_after_batch", True)
-        )
-        if show_clear and always_clear:
+        if queue_rows:
             self._remove_clip_from_render_queue(clip_path)
-            show_clear = False
         parent = self.ui.window() if hasattr(self.ui, "window") else self.ui
         dlg = RenderCompleteDialog(
             job,
             output_file,
             parent=parent,
-            show_clear_queue=show_clear,
-            always_clear_queue=always_clear,
+            cache_dir=getattr(self, "cache_dir", None),
+            elapsed_seconds=getattr(self, "_last_render_elapsed_sec", None),
         )
         dlg.open_in_rendered_requested.connect(self.open_in_rendered_videos)
         dlg.raise_()
         dlg.activateWindow()
         accepted = dlg.exec() == QDialog.DialogCode.Accepted
-        if show_clear:
-            self.save_user_settings(
-                "always_clear_render_queue_after_batch", dlg.clear_queue()
-            )
-            if accepted and dlg.clear_queue():
-                self._remove_clip_from_render_queue(clip_path)
         if not accepted:
             return
         choice = dlg.choice()
@@ -8292,8 +8276,8 @@ class RenderMixin:
                 if not getattr(self, "_queue_batch_active", False):
                     self._archive_single_render_to_history(active_job, output_file)
                 self._show_render_complete_dialog(active_job, output_file)
-                # Queue rows keep their own Completed state. A normal Start Render
-                # only has this header plaque, and it leaves with the dialog.
+                # The finished result is archived and its queue rows removed;
+                # the temporary header plaque leaves with the dialog.
                 if not getattr(self, "_queue_batch_active", False):
                     self._completed_plaque_clip_path = None
                     self.update_playback_badge()
