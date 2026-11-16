@@ -81,10 +81,6 @@ _SECTION_QSS = (
     "color: #ffffff; font-size: 15px; font-weight: bold;"
     f" background: transparent; font-family: {tok.FONT_APP};"
 )
-_NAME_LABEL_QSS = (
-    "color: #cccccc; font-size: 12px; font-weight: bold;"
-    f" background: transparent; font-family: {tok.FONT_APP};"
-)
 
 class _PresetPopupGuard(QObject):
     """Dismiss open combo lists when the editor loses the foreground."""
@@ -302,7 +298,7 @@ class PresetMiniEditor(SteempegDialog):
         name_col.setSpacing(4)
         name_col.setContentsMargins(0, 0, 0, 0)
         name_lbl = QLabel("Name")
-        name_lbl.setStyleSheet(_NAME_LABEL_QSS)
+        name_lbl.setStyleSheet(_FIELD_LABEL_QSS)
         self._name = QLineEdit()
         self._name.setPlaceholderText("Enter preset name…")
         self._name.setSizePolicy(
