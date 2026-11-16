@@ -72,6 +72,9 @@ class PlayVideoSplitButton(QWidget):
 
     play_clicked = Signal()
 
+    def apply_ui_theme_chrome(self) -> None:
+        self.setStyleSheet(_play_split_style())
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
