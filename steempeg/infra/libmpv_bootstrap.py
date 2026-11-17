@@ -216,6 +216,26 @@ def bootstrap_libmpv() -> str | None:
         for d in lib_dirs:
             _preload_mpv_deps(d)
 
+    # A present library is not necessarily loadable: development bundles can
+    # outlive a distro upgrade or miss optional native dependencies.
+    mode = getattr(ctypes, "RTLD_GLOBAL", 0) or 0
+    try:
+        ctypes.CDLL(chosen, mode=mode)
+    except OSError as bundled_error:
+        system = find_system_libmpv()
+        if not system or os.path.realpath(system) == os.path.realpath(chosen):
+            raise OSError(f"Cannot load libmpv {chosen}: {bundled_error}") from bundled_error
+        try:
+            ctypes.CDLL(system, mode=mode)
+        except OSError as system_error:
+            raise OSError(
+                f"Cannot load libmpv {chosen}: {bundled_error}; "
+                f"system fallback {system}: {system_error}"
+            ) from system_error
+        logging.warning("libmpv %s could not load (%s); using system %s",
+                        chosen, bundled_error, system)
+        chosen = system
+
     os.environ["MPV_LIBRARY_PATH"] = chosen
 
     _orig = ctypes.util.find_library
@@ -226,11 +246,5 @@ def bootstrap_libmpv() -> str | None:
         return _orig(name)
 
     ctypes.util.find_library = _find  # type: ignore[assignment]
-
-    mode = getattr(ctypes, "RTLD_GLOBAL", 0) or 0
-    try:
-        ctypes.CDLL(chosen, mode=mode)
-    except OSError:
-        pass
 
     return chosen
