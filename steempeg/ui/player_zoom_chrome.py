@@ -11,9 +11,9 @@ from __future__ import annotations
 import logging
 import math
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QActionGroup, QCursor
-from PySide6.QtWidgets import QHBoxLayout, QMenu, QPushButton, QSizePolicy, QWidget
+from PySide6.QtCore import QSize, Qt, QRectF, QPointF
+from PySide6.QtGui import QActionGroup, QCursor, QPainter, QPalette
+from PySide6.QtWidgets import QHBoxLayout, QMenu, QPushButton, QSizePolicy, QWidget, QStyle, QStyleOptionButton
 
 from steempeg.ui import design_tokens as tok
 from steempeg.ui import ui_theme as ut
@@ -21,6 +21,25 @@ from steempeg.ui import ui_theme as ut
 ZOOM_LADDER: tuple[int, ...] = (100, 125, 150, 200, 300)
 DEFAULT_ZOOM_PCT = 100
 ZOOM_MIN_PCT = 100
+
+
+class _ZoomPercentButton(QPushButton):
+    def paintEvent(self, event):
+        # Center visible glyphs rather than the font's asymmetric ascent/descent.
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        text = option.text
+        option.text = ""
+        painter = QPainter(self)
+        self.style().drawControl(QStyle.ControlElement.CE_PushButton, option, painter, self)
+        rect = self.style().subElementRect(QStyle.SubElement.SE_PushButtonContents, option, self)
+        bounds = self.fontMetrics().tightBoundingRect(text)
+        center = QRectF(rect).center()
+        painter.setFont(self.font())
+        painter.setPen(option.palette.color(QPalette.ColorRole.ButtonText))
+        painter.drawText(QPointF(center.x() - bounds.center().x(),
+                                 center.y() - bounds.center().y()), text)
+
 ZOOM_MAX_PCT = 400
 # One notch of the mouse wheel ≈ this many percent.
 ZOOM_WHEEL_STEP_PCT = 10
@@ -123,7 +142,7 @@ def install_player_zoom_chrome(app) -> QWidget | None:
     btn_loupe.setToolTip("Loupe: click to arm — wheel zooms toward cursor; drag pans")
     btn_loupe.setAccessibleName("Preview loupe")
 
-    btn_pct = QPushButton()
+    btn_pct = _ZoomPercentButton()
     btn_pct.setObjectName("playerHeaderZoomPct")
     btn_pct.setCursor(Qt.CursorShape.PointingHandCursor)
     btn_pct.setFocusPolicy(Qt.FocusPolicy.NoFocus)
