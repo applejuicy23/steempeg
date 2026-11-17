@@ -932,29 +932,16 @@ class LifecycleMixin:
         dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         from steempeg.ui.ui_density import scaled_dialog_size
 
-        # Portable + Deck-class shells: scaled_dialog_size shrinks too hard for the
-        # Report / Close row. Keep About wide enough for labels.
-        # Linux height is applied after the layout is pinned — a short fixed
-        # box was crushing the logo onto the title and the hairline onto the names.
-        linux = sys.platform != "win32"
+        # Share the Windows layout and density on all desktop platforms.
         if getattr(self, "_portable_shell", False):
-            shell_w = 0
-            try:
-                shell_w = int(self.ui.width() or 0)
-            except Exception:
-                shell_w = 0
-            if linux or shell_w <= 1600:
+            shell_w = int(self.ui.width() or 0)
+            if shell_w <= 1600:
                 about_w, about_h = 560, 640
             else:
                 about_w, about_h = scaled_dialog_size(540, 620, parent=self.ui)
-        elif linux:
-            about_w, about_h = 540, 0
         else:
             about_w, about_h = scaled_dialog_size(520, 600, parent=self.ui)
-        if linux:
-            dialog.setFixedWidth(about_w)
-        else:
-            dialog.setFixedSize(about_w, about_h)
+        dialog.setFixedSize(about_w, about_h)
         dialog.setStyleSheet(ut.about_dialog_stylesheet(pro=about_pro))
 
         shell_layout = QVBoxLayout(dialog)
@@ -971,7 +958,7 @@ class LifecycleMixin:
 
         content = QVBoxLayout(card)
         content.setContentsMargins(28, 28, 28, 22)
-        content.setSpacing(12 if linux else 10)
+        content.setSpacing(10)
 
         # --- Centered brand ---
         logo_row = QHBoxLayout()
@@ -982,9 +969,6 @@ class LifecycleMixin:
         logo_row.addWidget(logo_label)
         logo_row.addStretch(1)
         content.addLayout(logo_row)
-        # Linux: stylesheet title paints into the logo without reserved height.
-        if linux:
-            content.addSpacing(12)
 
         # Title + optional PRO chip (same placement as the window title bar).
         title_row = QHBoxLayout()
@@ -993,8 +977,6 @@ class LifecycleMixin:
         title = QLabel("Steempeg")
         title.setObjectName("AboutTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-        if linux:
-            title.setMinimumHeight(40)
         title_row.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
         if about_pro:
             from steempeg.ui.widgets.pro_badge import ProBadge
@@ -1007,8 +989,6 @@ class LifecycleMixin:
         build = QLabel(f"Build: v{APP_VERSION_STR}")
         build.setObjectName("AboutDim")
         build.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        if linux:
-            build.setMinimumHeight(18)
         content.addWidget(build)
 
         desc = QLabel(
@@ -1020,7 +1000,7 @@ class LifecycleMixin:
         desc.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         content.addWidget(desc)
 
-        content.addSpacing(14 if linux else 10)
+        content.addSpacing(10)
 
         # --- Developer + links: match description column width ---
         mid_wrap = QWidget()
@@ -1077,7 +1057,7 @@ class LifecycleMixin:
         mid_wrap_lay.addLayout(mid)
         content.addWidget(mid_wrap)
 
-        content.addSpacing(16 if linux else 8)
+        content.addSpacing(8)
 
         # --- Powered by ♥ (thanks lives on the heart tooltip/click) ---
         powered_head_row = QHBoxLayout()
@@ -1085,18 +1065,14 @@ class LifecycleMixin:
         powered_head_row.addStretch(1)
         powered_head = QLabel("Powered by")
         powered_head.setObjectName("AboutSectionLabel")
-        if linux:
-            powered_head.setMinimumHeight(18)
         powered_head_row.addWidget(powered_head)
         powered_heart = _AboutThanksHeart()
         powered_head_row.addWidget(powered_heart)
         powered_head_row.addStretch(1)
         content.addLayout(powered_head_row)
-        if linux:
-            content.addSpacing(6)
 
         powered_row = QHBoxLayout()
-        powered_row.setSpacing(10 if linux else 6)
+        powered_row.setSpacing(6)
         powered_row.setAlignment(Qt.AlignmentFlag.AlignTop)
         powered_row.addStretch(1)
         powered_row.addWidget(self._about_powered_badge(
@@ -1139,16 +1115,13 @@ class LifecycleMixin:
 
         # Hairline under the three logos + captions (not through the names).
         hair_wrap = QHBoxLayout()
-        hair_wrap.setContentsMargins(36, 14 if linux else 8, 36, 4 if linux else 2)
+        hair_wrap.setContentsMargins(36, 8, 36, 2)
         hair_wrap.addWidget(self._about_hairline())
         content.addLayout(hair_wrap)
 
         # Keep the old "Special thanks…" band as empty air (text lives on ♥).
-        # Linux sizes the dialog to the content hint, so a stretch here would
-        # pad the card instead of filling a fixed window the way Windows does.
-        content.addSpacing(28 if linux else 36)
-        if not linux:
-            content.addStretch(1)
+        content.addSpacing(36)
+        content.addStretch(1)
 
         # Buttons above the Valve disclaimer (cleaner hierarchy).
         btn_row = QHBoxLayout()
@@ -1160,20 +1133,11 @@ class LifecycleMixin:
         btn_report.clicked.connect(self.show_report_dialog)
 
         from steempeg.ui.icon_assets import load_pixmap
-        from steempeg.ui.kofi_dialog import KOFI_MARK, register_bundled_fredoka
+        from steempeg.ui.kofi_dialog import KOFI_MARK
 
-        btn_kofi = QPushButton("  Support")
+        btn_kofi = QPushButton("Support")
         btn_kofi.setObjectName("AboutKofiBtn")
         btn_kofi.setCursor(Qt.CursorShape.PointingHandCursor)
-        fredoka = register_bundled_fredoka()
-        kofi_font = QFont()
-        if fredoka:
-            kofi_font.setFamily(fredoka)
-        else:
-            kofi_font.setFamilies(["Candara", "Calibri", "Segoe UI"])
-        kofi_font.setPointSize(12)
-        kofi_font.setWeight(QFont.Weight.Bold)
-        btn_kofi.setFont(kofi_font)
         cup = load_pixmap(KOFI_MARK, 18)
         if not cup.isNull():
             btn_kofi.setIcon(QIcon(cup))
@@ -1189,7 +1153,7 @@ class LifecycleMixin:
         btn_row.addStretch(1)
         content.addLayout(btn_row)
 
-        content.addSpacing(12 if linux else 8)
+        content.addSpacing(8)
 
         disclaimer = QLabel(
             "Steempeg is an unofficial, community-created tool.\n"
@@ -1199,8 +1163,6 @@ class LifecycleMixin:
         disclaimer.setObjectName("AboutDisclaimer")
         disclaimer.setWordWrap(True)
         disclaimer.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        if linux:
-            disclaimer.setMinimumHeight(36)
         content.addWidget(disclaimer)
 
         def apply_ui_theme_chrome() -> None:
@@ -1249,10 +1211,14 @@ class LifecycleMixin:
                 f'style="{new_link}">applejuicy23</a>',
             ))
             links_col.addStretch(1)
-            self._seal_linux_about_dialog(dialog)
+            dialog.ensurePolished()
 
         dialog.apply_ui_theme_chrome = apply_ui_theme_chrome  # type: ignore[attr-defined]
-        self._seal_linux_about_dialog(dialog)
+        dialog.ensurePolished()
+        # Font metrics differ between rasterizers. Keep the shared layout, but
+        # never compress its labels below their actual minimum height.
+        dialog.layout().activate()
+        dialog.setFixedHeight(max(about_h, dialog.minimumSizeHint().height()))
 
         try:
             dialog.exec()
