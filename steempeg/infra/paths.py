@@ -137,6 +137,17 @@ def display_path(path: str) -> str:
     return path
 
 
+# Capture before app.main configures Qt for its embedded X11 player. External
+# applications must retain the desktop's own platform/theme and GL selection.
+_DESKTOP_ENV_KEYS = (
+    "QT_QPA_PLATFORM", "QT_QPA_PLATFORMTHEME", "QT_XCB_GL_INTEGRATION",
+    "QT_STYLE_OVERRIDE", "QT_LOGGING_RULES", "QT_PLUGIN_PATH",
+    "QT_QPA_PLATFORM_PLUGIN_PATH", "FONTCONFIG_FILE", "LIBGL_ALWAYS_SOFTWARE",
+    "GALLIUM_DRIVER", "QT_OPENGL",
+)
+_INITIAL_DESKTOP_ENV = {key: os.environ.get(key) for key in _DESKTOP_ENV_KEYS}
+
+
 def _linux_desktop_env() -> dict[str, str]:
     """Best-effort session env for ``xdg-open`` / ``kde-open`` on Linux.
 
@@ -145,6 +156,11 @@ def _linux_desktop_env() -> dict[str, str]:
     those even when Qt itself already connected to the display.
     """
     env = os.environ.copy()
+    for key, original in _INITIAL_DESKTOP_ENV.items():
+        if original is None:
+            env.pop(key, None)
+        else:
+            env[key] = original
     try:
         uid = os.getuid()
     except AttributeError:
@@ -203,6 +219,7 @@ def _spawn_detached(
     *,
     new_session: bool | None = None,
     env: dict[str, str] | None = None,
+    diagnose: bool = False,
 ) -> None:
     """Start ``cmd`` without blocking the Qt UI thread.
 
@@ -229,7 +246,45 @@ def _spawn_detached(
         # Opt-in only (updates / long-lived helpers). Default False on Linux so
         # xdg-open keeps session bus + DISPLAY.
         kwargs["start_new_session"] = True
-    subprocess.Popen(cmd, **kwargs)
+    if diagnose and sys.platform.startswith("linux"):
+        import threading
+        import uuid
+        from datetime import datetime
+
+        logs_dir = os.path.join(get_save_directory(), "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        trace_path = os.path.join(logs_dir, "desktop_open_" +
+                                 datetime.now().strftime("%Y%m%d_%H%M%S") +
+                                 "_" + uuid.uuid4().hex[:8] + ".log")
+        with open(trace_path, "w", encoding="utf-8") as trace:
+            trace.write(f"Command: {cmd!r}\n")
+            selected_env = env if env is not None else os.environ
+            for key in ("XDG_CURRENT_DESKTOP", "QT_QPA_PLATFORM", "QT_QPA_PLATFORMTHEME",
+                        "QT_XCB_GL_INTEGRATION", "QT_PLUGIN_PATH", "LD_LIBRARY_PATH",
+                        "FONTCONFIG_FILE"):
+                trace.write(f"{key}={selected_env.get(key, '<unset>')}\n")
+            trace.flush()
+            kwargs.update(stdout=trace, stderr=subprocess.STDOUT)
+            process = subprocess.Popen(cmd, **kwargs)
+        logging.info("[desktop-open] dispatched pid=%s command=%r diagnostics=%s",
+                     process.pid, cmd, trace_path)
+
+        def observe_exit():
+            try:
+                code = process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                logging.info("[desktop-open] helper pid=%s still running after 15s; "
+                             "this does not confirm playback; diagnostics=%s", process.pid, trace_path)
+                code = process.wait()
+            with open(trace_path, "a", encoding="utf-8") as trace:
+                trace.write(f"\nHelper exit code: {code}\n")
+            log = logging.warning if code else logging.info
+            log("[desktop-open] helper exited pid=%s code=%s diagnostics=%s "
+                "(helper success does not confirm player startup)", process.pid, code, trace_path)
+
+        threading.Thread(target=observe_exit, name="desktop-open-diagnostics", daemon=True).start()
+    else:
+        subprocess.Popen(cmd, **kwargs)
 
 
 def open_path_with_default_app(path: str) -> None:
@@ -249,8 +304,7 @@ def open_path_with_default_app(path: str) -> None:
         last_exc: Exception | None = None
         for cmd in _linux_open_commands(norm):
             try:
-                _spawn_detached(cmd, new_session=False, env=env)
-                logging.debug("Opened %s via %s", norm, cmd[0])
+                _spawn_detached(cmd, new_session=False, env=env, diagnose=True)
                 return
             except OSError as exc:
                 last_exc = exc
