@@ -507,6 +507,11 @@ class SettingsDialog(SteempegDialog):
     """
 
     def __init__(self, app, parent=None, *, settings_layout: str | None = None, **theme_kwargs):
+        global _SECTION, _HINT
+        _SECTION = (f"color: {tok.TEXT_TITLE}; font-size: 13px; font-weight: bold; "
+                    f"background: transparent; font-family: {tok.FONT_APP};")
+        _HINT = (f"color: {tok.TEXT_MUTED}; font-size: 11px; background: transparent; "
+                 f"font-family: {tok.FONT_APP};")
         parent_w = parent or getattr(app, "ui", None)
         if not theme_kwargs.get("bar_color"):
             theme_kwargs = {**dialog_theme(parent_w), **theme_kwargs}
@@ -879,13 +884,16 @@ class SettingsDialog(SteempegDialog):
             font_row.addWidget(font_lbl)
             font_row.addWidget(self._combo_ui_font, 1)
             v.addLayout(font_row)
-            v.addWidget(
-                self._hint(
-                    "Auto uses real Segoe UI files when they are present, otherwise "
-                    "bundled Selawik. A fontconfig alias that only substitutes "
-                    "Adwaita or Noto does not count as Segoe."
-                )
-            )
+            from PySide6.QtGui import QFontInfo
+
+            actual_family = QFontInfo(QApplication.font()).family()
+            segoe_status = "installed" if tok.segoe_ui_available() else "not installed"
+            v.addWidget(self._hint(
+                f"Active font: {actual_family}. Segoe UI: {segoe_status}. "
+                "Segoe UI is supplied by the user; it is not bundled. "
+                "Auto uses installed Segoe UI, otherwise bundled Selawik."
+            ))
+
 
         v.addWidget(self._section("Side panels"))
         sides_row = QHBoxLayout()

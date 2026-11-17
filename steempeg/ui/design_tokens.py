@@ -247,13 +247,12 @@ def _rebuild_font_css() -> None:
     global FONT_APP, FONT_SEMIBOLD, FONT_UI, FONT_FAMILY_CSS, FONT_UI_FAMILIES
     global STYLE_PANEL_TITLE, STYLE_PANEL_SUBTITLE, STYLE_PANEL_HEADING
     global STYLE_HEADING, STYLE_SUBHEADING
-    FONT_UI_FAMILIES = (
-        "Cascadia UI",
-        "Segoe UI Variable",
-        *FONT_FAMILIES,
+    FONT_UI_FAMILIES = FONT_FAMILIES if ui_font_preference_supported() else (
+        "Cascadia UI", "Segoe UI Variable", *FONT_FAMILIES,
     )
     FONT_APP = _css_families(*FONT_FAMILIES)
-    FONT_SEMIBOLD = _css_families("Segoe UI Semibold", "Selawik Semibold", *FONT_FAMILIES)
+    FONT_SEMIBOLD = (FONT_APP if ui_font_preference_supported() else
+                     _css_families("Segoe UI Semibold", "Selawik Semibold", *FONT_FAMILIES))
     FONT_UI = _css_families(*FONT_UI_FAMILIES)
     FONT_FAMILY_CSS = f"font-family: {FONT_APP}"
     try:
@@ -375,6 +374,11 @@ def apply_ui_font_preference(pref: str | None = None, *, app=None) -> str:
         # Always pin via FONT_FAMILIES. Bare QFont() copies the *current* app
         # font under Qt — so System would stick on the previous Selawik face.
         target.setFont(ui_qfont(10))
+        import logging
+        from PySide6.QtGui import QFontInfo
+        actual = QFontInfo(target.font())
+        logging.info("UI font: preference=%s requested=%s actual=%s style=%s",
+                     _ui_font_pref, FONT_FAMILIES[0], actual.family(), actual.styleName())
         try:
             apply_app_tooltip_style(target)
         except Exception:
