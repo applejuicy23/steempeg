@@ -269,4 +269,6 @@ This is primarily a solo project; PRs are appreciated but may take time to revie
 
 ---
 
-Made with care by [Emily](https://github.com/applejuicy23) 🎀 · [Steam](https://steamcommunity.com/id/applejuicy23/)
+<p align="center">
+  Made with care by <a href="https://github.com/applejuicy23">Emily</a> 🎀 · <a href="https://steamcommunity.com/id/applejuicy23/">Steam</a>
+</p>
