@@ -74,7 +74,7 @@ class LibraryTabWidget(QFrame):
         self._row = QHBoxLayout(self)
         self._row.setSpacing(2)
 
-        self._text = QLabel(label)
+        self._text = QLabel(label.replace(" ", "\u2002", 1))
         self._text.setObjectName("libraryTabText")
         self._text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._row.addWidget(self._text)
@@ -95,7 +95,7 @@ class LibraryTabWidget(QFrame):
 
     def set_label(self, label: str) -> None:
         self._label = label
-        self._text.setText(label)
+        self._text.setText(label.replace(" ", "\u2002", 1))
         self._recompute_min_width()
 
     def apply_density(self, dense: UiDensity) -> None:

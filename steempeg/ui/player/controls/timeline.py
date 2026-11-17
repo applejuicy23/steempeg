@@ -2026,27 +2026,27 @@ class TimelineCanvas(QWidget):
         is_screenshot_marker = marker.get('icon_key') == 'screenshot'
         
         if is_user_marker:
-            action_edit = menu.addAction("✏️ Edit Marker")
-            action_duplicate = menu.addAction("📋 Duplicate")
-            action_delete = menu.addAction("🗑️ Delete Marker")
+            action_edit = menu.addAction("✏️ Edit Marker")
+            action_duplicate = menu.addAction("📋 Duplicate")
+            action_delete = menu.addAction("🗑️ Delete Marker")
             menu.addSeparator() 
 
         action_open_screenshot = None
         action_open_screenshot_folder = None
         if is_screenshot_marker:
-            action_open_screenshot = menu.addAction("🖼 Open Screenshot")
-            action_open_screenshot_folder = menu.addAction("📂 Open Screenshot folder")
+            action_open_screenshot = menu.addAction("🖼 Open Screenshot")
+            action_open_screenshot_folder = menu.addAction("📂 Open Screenshot folder")
             menu.addSeparator()
 
         # Stock + custom + screenshots — jump into Marker Settings on the same pin.
         if not marker.get("is_round"):
-            action_goto_settings = menu.addAction("➡️ Go to Marker Settings")
+            action_goto_settings = menu.addAction("➡️ Go to Marker Settings")
             menu.addSeparator()
             
-        action_trim = menu.addAction("✂️ Set Trim Start Here")
+        action_trim = menu.addAction("✂️ Set Trim Start Here")
         
         # NEW SCREENSHOT BUTTON
-        action_screenshot = menu.addAction("📸 Take Screenshot Here")
+        action_screenshot = menu.addAction("📸 Take Screenshot Here")
 
         self._context_menu_open = True
         self.hovered_marker = marker
@@ -2082,8 +2082,8 @@ class TimelineCanvas(QWidget):
         menu.setStyleSheet(ut.library_menu_stylesheet())
         self._prepare_immersive_safe_menu(menu)
 
-        action_add_marker = menu.addAction("📍 Add Marker Here")
-        action_screenshot = menu.addAction("📸 Take Screenshot Here")
+        action_add_marker = menu.addAction("📍 Add Marker Here")
+        action_screenshot = menu.addAction("📸 Take Screenshot Here")
 
         self._context_menu_open = True
         try:
