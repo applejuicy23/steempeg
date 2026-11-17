@@ -821,6 +821,8 @@ class SteempegTitleBar(QWidget):
         self._lights_poll.setInterval(32)
         self._lights_poll.timeout.connect(self._poll_traffic_light_hover)
         self._lights_poll.start()
+        self._window.installEventFilter(self)
+        self.sync_window_state()
 
     def _poll_traffic_light_hover(self) -> None:
         win = self._window
@@ -836,6 +838,11 @@ class SteempegTitleBar(QWidget):
         refresh_traffic_lights_under_cursor_all()
 
     def eventFilter(self, watched, event):
+        if watched is self._window and event.type() in (
+            QEvent.Type.Resize, QEvent.Type.Move,
+            QEvent.Type.WindowStateChange, QEvent.Type.Show,
+        ):
+            self.sync_window_state()
         pairs = (
             (
                 getattr(self, "btn_about_info", None),
@@ -1236,21 +1243,12 @@ class SteempegTitleBar(QWidget):
         refresh_traffic_lights_under_cursor(self._window)
 
     def sync_window_state(self) -> None:
-        # Linux fake-maximize uses work-area geometry (isMaximized() stays False).
-        maximized = self._window.isMaximized()
-        if not maximized and sys.platform != "win32":
-            from PySide6.QtWidgets import QApplication
-
-            screen = self._window.screen() or QApplication.primaryScreen()
-            if screen is not None:
-                avail = screen.availableGeometry()
-                geo = self._window.geometry()
-                maximized = (
-                    abs(geo.x() - avail.x()) <= 16
-                    and abs(geo.y() - avail.y()) <= 16
-                    and abs(geo.width() - avail.width()) <= 48
-                    and abs(geo.height() - avail.height()) <= 48
-                )
+        # Geometry changes also matter: Linux maximizes by resizing to the
+        # work area, without emitting WindowStateChange.
+        maximized = _nearly_maximized(self._window)
+        glyph = "restore" if maximized else "maximize"
+        if self.btn_maximize._glyph == glyph:
+            return
         if maximized:
             self.btn_maximize.setToolTip("Restore")
             self.btn_maximize._glyph = "restore"
