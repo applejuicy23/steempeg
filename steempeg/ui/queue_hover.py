@@ -627,7 +627,16 @@ class QueueHoverOverlay(QWidget):
         else:
             card_x = ox + int(span.width()) - shown - outer
         overlay_y = oy + inset_y
-        self.setGeometry(card_x, overlay_y, card_w, card_h)
+        # Keep the Linux Tool inside the work area. Moving a top-level window
+        # beyond the screen lets the compositor clamp it, turning a slide into
+        # a left-to-right mask reveal. Translate the card inside a fixed canvas.
+        offset = 0
+        canvas_x = card_x
+        if sys.platform != "win32":
+            canvas_x = (ox + outer if self._from_left else
+                        ox + int(span.width()) - card_w - outer)
+            offset = card_x - canvas_x
+        self.setGeometry(canvas_x, overlay_y, card_w, card_h)
         if sys.platform == "win32":
             try:
                 from steempeg.infra.window_focus import detach_tool_ownership
@@ -635,7 +644,7 @@ class QueueHoverOverlay(QWidget):
                 detach_tool_ownership(self)
             except Exception:
                 pass
-        self._card = QRect(0, 0, card_w, card_h)
+        self._card = QRect(offset, 0, card_w, card_h)
         self._body.setGeometry(self._card)
         grip_h = min(_BULGE_H, max(64, card_h - 48))
         grip_y = max(8, (card_h - grip_h) // 2)
@@ -647,7 +656,7 @@ class QueueHoverOverlay(QWidget):
         # This remains a Tool above native mpv, but must never draw or receive
         # clicks outside the app. The snapshot avoids live queue repaints on X11.
         clip = _host_clip_rect(self, host) if self._slide > 0.0 else QRect()
-        mask_key = (int(card_w), int(card_h), int(_RADIUS), clip.getRect())
+        mask_key = (int(card_w), int(card_h), int(_RADIUS), self._card.x(), clip.getRect())
         if mask_key != self._mask_key:
             try:
                 region = _round_region(self._card, float(_RADIUS))
