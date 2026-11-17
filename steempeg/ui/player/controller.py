@@ -398,6 +398,14 @@ class PlayerMixin:
         try:
             wrapper._last_video_rect = None
             wrapper.update_geometry()
+            screen = getattr(self, "mpv_screen", None)
+            if (screen is not None and screen.isVisible()
+                    and screen.width() > 4 and screen.height() > 4
+                    and QApplication.platformName() == "xcb"):
+                from steempeg.ui.player.x11_embed import map_mpv_child
+
+                mapped = map_mpv_child(int(screen.winId()))
+                logging.debug("Linux embed reveal: mapped %s mpv child window(s)", mapped)
         except Exception as exc:
             logging.debug("Linux embed surface kick failed: %s", exc)
 
@@ -1176,6 +1184,14 @@ class PlayerMixin:
         self._kick_linux_embed_surface()
         if sys.platform != "win32":
             QTimer.singleShot(0, self._kick_linux_embed_surface)
+            # VO reconfiguration can finish after Qt reveals the parent. A
+            # bounded retry covers that ordering without polling during playback.
+            def settle_embed(gen=switch_gen):
+                if gen == getattr(self, "_media_switch_gen", 0):
+                    self._kick_linux_embed_surface()
+
+            QTimer.singleShot(100, settle_embed)
+            QTimer.singleShot(300, settle_embed)
         # Switching gate can clear as soon as the new picture is visible.
         self._finish_preview_switch(switch_gen)
         clip = getattr(self, "_preview_clip_path", None)
@@ -1209,8 +1225,10 @@ class PlayerMixin:
         """
         del args
         if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled():
+            logging.debug("[video-click] toggle ignored: timeline disabled")
             return
         if not getattr(self, 'player', None):
+            logging.debug("[video-click] toggle ignored: no player")
             return
         try:
             if getattr(self.player, 'path', None) is None:
@@ -1238,6 +1256,7 @@ class PlayerMixin:
                 self._restart_from_eof = False
                 self.player.pause = True
             paused = bool(self.player.pause)
+            logging.debug("[video-click] transport applied: paused=%s pulse=%s", paused, pulse)
             self._sync_play_button_icon(paused=paused)
             if pulse:
                 self._pulse_play_pause_on_surface(paused=paused)
@@ -1274,12 +1293,15 @@ class PlayerMixin:
             return
         if getattr(self, "_preview_zoom_suppress_click", False):
             self._preview_zoom_suppress_click = False
+            logging.debug("[video-click] ignored: completed pan gesture")
             return
         # Don't steal clicks while a modal / popup is up.
         try:
             if QApplication.activeModalWidget() is not None:
+                logging.debug("[video-click] ignored: active modal")
                 return
             if QApplication.activePopupWidget() is not None:
+                logging.debug("[video-click] ignored: active popup")
                 return
         except Exception:
             pass
@@ -1408,12 +1430,13 @@ class PlayerMixin:
             self._linux_pointer_hop = hop
 
         def post(fn) -> None:
-            hop.call.emit(fn)
+            hop.call.emit(lambda: fn() if alive() else None)
 
         def on_left(state, _name, _char, _scale, _arg) -> None:
             if not alive():
                 return
             kind = phase(state)
+            logging.debug("[video-click] mpv left state=%r phase=%s", state, kind)
             x, y = xy()
             if kind == "d":
                 self._linux_ptr_button = "left"
@@ -1421,6 +1444,12 @@ class PlayerMixin:
             elif kind == "u":
                 self._linux_ptr_button = None
                 post(self._linux_embed_left_release)
+            elif kind == "p":
+                # mpv can deliver an atomic press instead of a down/up pair.
+                post(self._on_video_surface_click)
+            elif kind == "cancel":
+                self._linux_ptr_button = None
+                post(self._preview_zoom_pan_end)
 
         def on_right(state, _name, _char, _scale, _arg) -> None:
             if not alive():
@@ -1484,6 +1513,11 @@ class PlayerMixin:
             player.input_doubleclick_time = 0
             player.register_key_binding("MBTN_LEFT", on_left, "force")
             player.register_key_binding("MBTN_RIGHT", on_right, "force")
+            # python-mpv enables allow-vo-dragging by default. Embedded video
+            # must not let mpv turn a slightly moving click into a window drag;
+            # zoom panning belongs to our own handlers above.
+            for key in ("MBTN_LEFT", "MBTN_RIGHT"):
+                player.command("enable-section", player._binding_name(key), "allow-hide-cursor")
             player.register_key_binding("WHEEL_UP", on_wheel(1), "force")
             player.register_key_binding("WHEEL_DOWN", on_wheel(-1), "force")
             player.observe_property("mouse-pos", on_pos)
@@ -1498,6 +1532,8 @@ class PlayerMixin:
 
     def _linux_embed_left_release(self) -> None:
         moved = self._preview_zoom_pan_end()
+        logging.debug("[video-click] GUI release: pan=%s zoom=%s", moved,
+                      getattr(self, "_preview_zoom_pct", 100))
         if not moved:
             self._on_video_surface_click()
 

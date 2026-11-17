@@ -23,11 +23,24 @@ import os
 import sys
 import time
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, Qt, QEvent, QObject
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QWidget
 
 _FS_TRACE = os.environ.get("STEEMPEG_FS_TRACE") == "1"
+
+
+class _EmbedVisibilityTrace(QObject):
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.Type.Show, QEvent.Type.Hide,
+                            QEvent.Type.ParentChange, QEvent.Type.WinIdChange):
+            import traceback
+
+            logging.debug("[embed-visibility] Qt surface event=%s visible=%s hidden=%s "
+                          "geometry=%s caller=%s", event.type().name,
+                          obj.isVisible(), obj.isHidden(), obj.geometry().getRect(),
+                          " | ".join(line.strip() for line in traceback.format_stack(limit=9)))
+        return False
 
 
 class MPVWrapper(QWidget):
@@ -42,6 +55,9 @@ class MPVWrapper(QWidget):
         self._native_embed = sys.platform == "win32"
 
         self.mpv_screen = QWidget(self)
+        if sys.platform != "win32":
+            self._visibility_trace = _EmbedVisibilityTrace(self)
+            self.mpv_screen.installEventFilter(self._visibility_trace)
         if self._native_embed:
             self._apply_native_attrs(self.mpv_screen, for_video=True)
         else:

@@ -50,6 +50,8 @@ class PlayPausePulseOverlay(QWidget):
             | Qt.WindowType.NoDropShadowWindowHint
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
+        if sys.platform != "win32":
+            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -178,6 +180,13 @@ class PlayPausePulseOverlay(QWidget):
             except Exception:
                 pass
         self.show()
+        self._apply_click_through()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # Mapping the native X window can reset the input shape set before show.
+        self._apply_click_through()
+        QTimer.singleShot(0, self._apply_click_through)
 
     def _reposition(self) -> None:
         anchor = self._anchor
