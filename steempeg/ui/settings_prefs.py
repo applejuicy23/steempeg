@@ -703,7 +703,7 @@ def load_keep_running_in_tray(settings: dict | None) -> bool:
 
 KEY_HIDE_SPLITTER_HANDLES = "hide_splitter_handles"
 KEY_SHELL_PANE_PERCENTS = "shell_pane_percents"
-DEFAULT_HIDE_SPLITTER_HANDLES = False
+DEFAULT_HIDE_SPLITTER_HANDLES = True
 DEFAULT_SHELL_PANE_PERCENTS = (34, 42, 24)
 
 
