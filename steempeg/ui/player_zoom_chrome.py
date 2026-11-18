@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import math
+import sys
 
 from PySide6.QtCore import QSize, Qt, QRectF, QPointF
 from PySide6.QtGui import QActionGroup, QCursor, QPainter, QPalette
@@ -25,7 +26,12 @@ ZOOM_MIN_PCT = 100
 
 class _ZoomPercentButton(QPushButton):
     def paintEvent(self, event):
-        # Center visible glyphs rather than the font's asymmetric ascent/descent.
+        if not sys.platform.startswith("linux"):
+            super().paintEvent(event)
+            return
+
+        # Linux / Steam Deck: correct the baseline without shifting the label
+        # horizontally away from its ordinary Qt button placement.
         option = QStyleOptionButton()
         self.initStyleOption(option)
         text = option.text
@@ -33,11 +39,12 @@ class _ZoomPercentButton(QPushButton):
         painter = QPainter(self)
         self.style().drawControl(QStyle.ControlElement.CE_PushButton, option, painter, self)
         rect = self.style().subElementRect(QStyle.SubElement.SE_PushButtonContents, option, self)
-        bounds = self.fontMetrics().tightBoundingRect(text)
+        metrics = self.fontMetrics()
+        bounds = QRectF(metrics.tightBoundingRect(text))
         center = QRectF(rect).center()
         painter.setFont(self.font())
         painter.setPen(option.palette.color(QPalette.ColorRole.ButtonText))
-        painter.drawText(QPointF(center.x() - bounds.center().x(),
+        painter.drawText(QPointF(center.x() - metrics.horizontalAdvance(text) / 2,
                                  center.y() - bounds.center().y()), text)
 
 ZOOM_MAX_PCT = 400
