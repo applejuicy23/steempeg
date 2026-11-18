@@ -1,9 +1,12 @@
 """App-wide Settings dialog — prefs that are not one click away elsewhere."""
 from __future__ import annotations
 
+import logging
 import os
+import time
+from copy import deepcopy
 
-from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, QSize, QTimer
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QApplication,
@@ -321,8 +324,8 @@ _SETTINGS_HEIGHT_FRAC = 0.85
 _SETTINGS_MIN_H = 320
 
 
-def _tab_page() -> tuple[QWidget, QVBoxLayout]:
-    page = QWidget()
+def _tab_page(parent) -> tuple[QWidget, QVBoxLayout]:
+    page = QWidget(parent)
     layout = QVBoxLayout(page)
     layout.setContentsMargins(12, 12, 12, 12)
     layout.setSpacing(10)
@@ -384,7 +387,7 @@ def _settings_page_inner_stylesheet(bg: str) -> str:
     return f"QWidget#settingsPageInner {{ background-color: {bg}; }}"
 
 
-def _scroll_settings_tab(inner: QWidget, bg: str | None = None) -> QScrollArea:
+def _scroll_settings_tab(inner: QWidget, bg: str | None = None, *, parent=None) -> QScrollArea:
     """Wrap a settings tab page; lavender pill scrollbar matches the library."""
     from steempeg.ui.library.library_styles import (
         LIBRARY_SCROLLBAR_VERTICAL,
@@ -396,7 +399,7 @@ def _scroll_settings_tab(inner: QWidget, bg: str | None = None) -> QScrollArea:
     inner.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
     inner.setStyleSheet(_settings_page_inner_stylesheet(bg))
 
-    scroll = _SettingsTabScroll()
+    scroll = _SettingsTabScroll(parent)
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QFrame.Shape.NoFrame)
     scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -483,7 +486,8 @@ class SettingsDialog(SteempegDialog):
     classic-tabs frame (``settings_layout``).
     """
 
-    def __init__(self, app, parent=None, *, settings_layout: str | None = None, **theme_kwargs):
+    def __init__(self, app, parent=None, *, settings_layout: str | None = None,
+                 prepared_settings: dict | None = None, **theme_kwargs):
         global _SECTION, _HINT
         _SECTION = (f"color: {tok.TEXT_TITLE}; font-size: 13px; font-weight: bold; "
                     f"background: transparent; font-family: {tok.FONT_APP};")
@@ -504,13 +508,34 @@ class SettingsDialog(SteempegDialog):
         self.setMinimumHeight(_SETTINGS_MIN_H)
         self._apply_settings_geometry()
 
-        settings = {}
-        if hasattr(app, "load_user_settings"):
-            try:
-                settings = app.load_user_settings() or {}
-            except Exception:
-                settings = {}
+        settings = prepared_settings if prepared_settings is not None else _load_settings(app)
+        self._form_builder = self._build_form(settings)
+        if prepared_settings is None:
+            self.finish_preparation()
 
+    def prepare_next_step(self) -> bool:
+        """Build one slice on the Qt thread. Return True when ready to show."""
+        if self._form_builder is not None:
+            try:
+                next(self._form_builder)
+            except StopIteration:
+                self._form_builder = None
+        return self._form_builder is None
+
+    def finish_preparation(self) -> None:
+        while not self.prepare_next_step():
+            pass
+
+    def refresh_before_opening(self) -> None:
+        """Refresh values sourced from live state rather than saved preferences."""
+        with QSignalBlocker(self._chk_autostart):
+            self._chk_autostart.setChecked(read_autostart_enabled())
+        self._seed_pane_spins_from_live()
+        self._refit_pane_percent_spins(seed_hover_queue=True, remember_baseline=True)
+        self._reset_apply_baseline()
+
+    def _build_form(self, settings):
+        app = self._app
         root = self.content_layout
         root.setSpacing(10)
 
@@ -518,7 +543,7 @@ class SettingsDialog(SteempegDialog):
         self._settings_frame = None
 
         # ----- General (Updates + Export + Render landing + Shell) -----
-        general, g = _tab_page()
+        general, g = _tab_page(self)
         g.addWidget(self._section("Updates"))
         upd_row = QHBoxLayout()
         upd_row.setSpacing(8)
@@ -541,6 +566,7 @@ class SettingsDialog(SteempegDialog):
         )
         g.addWidget(self._chk_hide_update_available)
 
+        yield
         g.addWidget(self._section("Export"))
         export_row = QHBoxLayout()
         export_row.setSpacing(8)
@@ -563,6 +589,7 @@ class SettingsDialog(SteempegDialog):
         self._export_folder_hint.setProperty("helper_when_outside", True)
         g.addWidget(self._export_folder_hint)
         self._refresh_export_folder_hint()
+        yield
 
         portable_shell = bool(getattr(self._app, "_portable_shell", False))
 
@@ -737,6 +764,7 @@ class SettingsDialog(SteempegDialog):
                 self._on_hide_splitter_handles_toggled
             )
 
+        yield
         self._chk_keep_running_in_tray = SteempegCheckBox("Keep Steempeg running in the tray")
         self._chk_keep_running_in_tray.setChecked(load_keep_running_in_tray(settings))
         self._chk_autostart = SteempegCheckBox("Start Steempeg with Windows")
@@ -819,8 +847,10 @@ class SettingsDialog(SteempegDialog):
         g.addStretch(1)
         self._settings_pages.append(("General", general, g))
 
+        yield
+
         # ----- Visual -----
-        visual, v = _tab_page()
+        visual, v = _tab_page(self)
         v.addWidget(self._section("Theme"))
         theme_row = QHBoxLayout()
         theme_row.setSpacing(8)
@@ -871,6 +901,8 @@ class SettingsDialog(SteempegDialog):
                 "Auto uses installed Segoe UI, otherwise bundled Selawik."
             ))
 
+
+        yield
 
         v.addWidget(self._section("Side panels"))
         sides_row = QHBoxLayout()
@@ -1011,6 +1043,8 @@ class SettingsDialog(SteempegDialog):
         self._clip_card_style_preview_timer.setInterval(200)
         self._clip_card_style_preview_timer.timeout.connect(self._apply_clip_card_style_preview)
         self._combo_clip_card_style.currentIndexChanged.connect(self._preview_clip_card_style)
+
+        yield
 
         v.addWidget(self._section("Player header"))
         header_row = QHBoxLayout()
@@ -1186,6 +1220,8 @@ class SettingsDialog(SteempegDialog):
         self._combo_player_outline.currentIndexChanged.connect(
             self._preview_player_outline
         )
+
+        yield
 
         v.addWidget(self._section("Player timeline"))
         strip_row = QHBoxLayout()
@@ -1365,8 +1401,10 @@ class SettingsDialog(SteempegDialog):
         v.addStretch(1)
         self._settings_pages.append(("Visual", visual, v))
 
+        yield
+
         # ----- Notifications -----
-        notify, n = _tab_page()
+        notify, n = _tab_page(self)
         n.addWidget(self._section("Notifications"))
         self._chk_notify = SteempegCheckBox("Notify when render finishes or fails")
         self._chk_notify.setChecked(
@@ -1394,8 +1432,10 @@ class SettingsDialog(SteempegDialog):
         n.addStretch(1)
         self._settings_pages.append(("Notifications", notify, n))
 
+        yield
+
         # ----- Performance -----
-        perf, p = _tab_page()
+        perf, p = _tab_page(self)
         p.addWidget(self._section("Performance"))
         prio_row = QHBoxLayout()
         prio_row.setSpacing(8)
@@ -1489,8 +1529,10 @@ class SettingsDialog(SteempegDialog):
         p.addStretch(1)
         self._settings_pages.append(("Performance", perf, p))
 
+        yield
+
         # ----- Support -----
-        support, s = _tab_page()
+        support, s = _tab_page(self)
         s.addWidget(self._section("Hints"))
         self._chk_hide_helper_text = SteempegCheckBox("Hide helper text")
         self._committed_hide_helper_text = load_hide_settings_hints(settings)
@@ -1578,16 +1620,20 @@ class SettingsDialog(SteempegDialog):
         s.addStretch(1)
         self._settings_pages.append(("Support", support, s))
 
+        yield
+
         # ----- PRO -----
-        pro_page, pro_lay = _tab_page()
+        pro_page, pro_lay = _tab_page(self)
         self._steempeg_pro = bool(load_steempeg_pro(settings))
         self._pro_banner = self._build_pro_promo_banner()
         pro_lay.addWidget(self._pro_banner)
         pro_lay.addStretch(1)
         self._settings_pages.append(("PRO", pro_page, pro_lay))
 
+        yield
+
         # ----- Advanced -----
-        advanced, a = _tab_page()
+        advanced, a = _tab_page(self)
         a.addWidget(self._section("Fullscreen"))
         self._chk_test_new_fullscreen = SteempegCheckBox(
             "Skip grey flash on fullscreen enter/exit",
@@ -1696,7 +1742,8 @@ class SettingsDialog(SteempegDialog):
 
         a.addStretch(1)
         self._settings_pages.append(("Advanced", advanced, a))
-        self._mount_settings_frame(root)
+        yield
+        yield from self._mount_settings_frame(root)
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
@@ -1728,14 +1775,19 @@ class SettingsDialog(SteempegDialog):
 
         install_no_wheel_value_filter(self)
 
-        self._apply_settings_form_chrome()
+        yield
+        yield from self._prepare_form_chrome()
         self._apply_helper_visibility()
 
         # Content can inflate sizeHint during build — re-cap before first map/center.
         self._apply_settings_geometry()
         self._init_apply_tracking()
+        for _title, page, _layout in self._settings_pages:
+            yield
+            page.ensurePolished()
+            page.layout().activate()
 
-    def _mount_settings_frame(self, root: QVBoxLayout) -> None:
+    def _mount_settings_frame(self, root: QVBoxLayout):
         """Puts the built pages into the picked frame: rail + cards, one scroll, or classic tabs."""
         from steempeg.ui import ui_theme as ut
         from steempeg.ui.widgets.setting_help import place_setting_help
@@ -1743,6 +1795,7 @@ class SettingsDialog(SteempegDialog):
         place_setting_help(self._pane_controls.layout())
         for _title, _page, page_layout in self._settings_pages:
             place_setting_help(page_layout)
+            yield
 
         if self._settings_layout == settings_layouts.SETTINGS_LAYOUT_TABS:
             tabs = QTabWidget()
@@ -1760,6 +1813,7 @@ class SettingsDialog(SteempegDialog):
             if title == "PRO":
                 continue
             settings_layouts.regroup_page_into_cards(page_layout)
+            yield
         pages = [(title, page) for title, page, _layout in self._settings_pages]
 
         def wrap_on_dialog_face(page: QWidget) -> QScrollArea:
@@ -1768,11 +1822,15 @@ class SettingsDialog(SteempegDialog):
 
         if self._settings_layout == settings_layouts.SETTINGS_LAYOUT_SCROLL:
             frame = settings_layouts.SettingsScrollFrame(pages, wrap_on_dialog_face)
+            root.addWidget(frame, 1)
         else:
-            frame = settings_layouts.SettingsRailFrame(pages, wrap_on_dialog_face)
+            frame = settings_layouts.SettingsRailFrame([title for title, _page in pages], self)
+            root.addWidget(frame, 1)
+            for _title, page in pages:
+                frame.add_page(_scroll_settings_tab(page, self._settings_body_bg(), parent=frame.stack))
+                yield
         self._settings_frame = frame
         self._settings_tabs = frame.stack
-        root.addWidget(frame, 1)
 
     def _settings_body_bg(self) -> str:
         """Fill behind the pages: shell gray for classic tabs, the dialog face for card frames."""
@@ -2647,6 +2705,10 @@ class SettingsDialog(SteempegDialog):
         restart_application(app)
 
     def _apply_settings_form_chrome(self) -> None:
+        for _ in self._prepare_form_chrome():
+            pass
+
+    def _prepare_form_chrome(self):
         """Theme-aware combos, line edits, and secondary buttons across all tabs."""
         from steempeg.ui import ui_theme as ut
         from steempeg.ui.window_chrome import _TrafficLight
@@ -2657,9 +2719,11 @@ class SettingsDialog(SteempegDialog):
             f"border: 1px solid {palette.border_card}; border-radius: 10px;}}"
         )
         combo_qss = ut.settings_dialog_combo_stylesheet()
-        for combo in self.findChildren(QComboBox):
+        for index, combo in enumerate(self.findChildren(QComboBox), 1):
             combo.setStyleSheet(combo_qss)
             apply_dark_combo_popup(combo)
+            if index % 4 == 0:
+                yield
 
         edit_qss = ut.settings_dialog_line_edit_stylesheet()
         for edit in self.findChildren(QLineEdit):
@@ -2683,7 +2747,9 @@ class SettingsDialog(SteempegDialog):
         sec_qss = ut.settings_dialog_secondary_button_stylesheet()
         about_sec = ut.about_secondary_button_stylesheet()
         about_accent = ut.about_accent_button_stylesheet()
-        for btn in self.findChildren(QPushButton):
+        for index, btn in enumerate(self.findChildren(QPushButton)):
+            if index % 8 == 0:
+                yield
             # Title-bar traffic lights are QPushButtons — never restyle them as
             # form secondary buttons (idle becomes a gray square outline; they
             # paint the disc themselves).
@@ -3869,22 +3935,177 @@ class SettingsDialog(SteempegDialog):
             setattr(self, key, value)
 
 
+def _load_settings(app) -> dict:
+    try:
+        return app.load_user_settings() or {}
+    except Exception:
+        return {}
+
+
+class _SettingsSnapshot(dict):
+    """Record preferences consumed by the form so unrelated saves keep it warm."""
+
+    def __init__(self, settings: dict):
+        super().__init__(deepcopy(settings))
+        self.read_keys = set()
+
+    def get(self, key, default=None):
+        self.read_keys.add(key)
+        return super().get(key, default)
+
+    def __getitem__(self, key):
+        self.read_keys.add(key)
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        self.read_keys.add(key)
+        return super().__contains__(key)
+
+    def matches(self, current: dict) -> bool:
+        # Some preference loaders replace an empty dict with their defaults.
+        if not self:
+            return not current
+        missing = object()
+        return all(dict.get(self, key, missing) == current.get(key, missing)
+                   for key in self.read_keys)
+
+
+class _SettingsWarmup(QObject):
+    """Own one hidden form until it is opened; replenish it after the modal closes."""
+
+    _INPUT_EVENTS = frozenset((QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress,
+                               QEvent.Type.KeyPress, QEvent.Type.Wheel, QEvent.Type.TouchUpdate))
+
+    def __init__(self, app):
+        super().__init__(app.ui)
+        self.app = app
+        self.dialog = None
+        self.snapshot = None
+        self.context = None
+        self.last_input = 0.0
+        self.slowest_step = 0.0
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self._step)
+
+    def schedule(self) -> None:
+        QApplication.instance().installEventFilter(self)
+        self.timer.start(750)
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        if event.type() in self._INPUT_EVENTS:
+            self.last_input = time.monotonic()
+        return False
+
+    def _stop(self) -> None:
+        self.timer.stop()
+        QApplication.instance().removeEventFilter(self)
+
+    def _context(self) -> tuple:
+        from steempeg.ui import ui_theme
+
+        screen = self.app.ui.screen()
+        return (
+            self.app.ui, bool(getattr(self.app, "_portable_shell", False)),
+            ui_theme.active_palette().name, tok.FONT_APP, QApplication.font().toString(),
+            screen.name() if screen else None, screen.logicalDotsPerInch() if screen else None,
+            get_clip_card_style(), get_player_header_size(), get_timeline_strip_size(),
+            get_volume_boost_ceiling(), get_speed_boost_ceiling(),
+        )
+
+    def _discard(self) -> None:
+        if self.dialog is not None:
+            self.dialog._form_builder = None
+            self.dialog.deleteLater()
+        self.dialog = self.snapshot = self.context = None
+
+    def _step(self) -> None:
+        from steempeg.ui.startup_metrics import _BUSY
+
+        if not self.app.ui.isVisible():
+            self.timer.start(750)
+            return
+        startup = getattr(self.app, "_startup_measurement", None)
+        if (QApplication.activeModalWidget() is not None
+                or getattr(self.app, "_app_settings_open", False)
+                or QApplication.mouseButtons() != Qt.MouseButton.NoButton
+                or time.monotonic() - self.last_input < .20
+                or (startup is not None and startup.result is None)
+                or any(getattr(self.app, key, False) for key in _BUSY)
+                or getattr(self.app, "_is_switching", False)
+                or getattr(self.app, "_awaiting_first_frame", False)):
+            self.timer.start(200)
+            return
+        t0 = time.perf_counter()
+        try:
+            context = self._context()
+            if self.dialog is not None and context != self.context:
+                self._discard()
+            if self.dialog is None:
+                self.slowest_step = 0.0
+                self.snapshot = _SettingsSnapshot(_load_settings(self.app))
+                self.context = context
+                self.dialog = SettingsDialog(self.app, prepared_settings=self.snapshot)
+                ready = False
+            else:
+                ready = self.dialog.prepare_next_step()
+            self.slowest_step = max(self.slowest_step, time.perf_counter() - t0)
+            if ready:
+                logging.info("Settings warmup: all pages ready, longest slice %.1f ms",
+                             self.slowest_step * 1000)
+                self._stop()
+            else:
+                self.timer.start(32)
+        except Exception:
+            self._stop()
+            self._discard()
+            logging.exception("Settings warmup failed; normal opening remains available")
+
+    def take(self) -> SettingsDialog | None:
+        self._stop()
+        if self.dialog is None:
+            return None
+        try:
+            current = _load_settings(self.app)
+            if self.context == self._context() and self.snapshot.matches(current):
+                self.dialog.finish_preparation()
+                # A partial build may discover additional preference dependencies.
+                if self.snapshot.matches(current):
+                    dialog = self.dialog
+                    dialog.refresh_before_opening()
+                    self.dialog = self.snapshot = self.context = None
+                    return dialog
+        except Exception:
+            logging.exception("Could not open prepared Settings; rebuilding")
+        self._discard()
+        return None
+
+
+def schedule_settings_warmup(app) -> None:
+    if not isinstance(getattr(app, "ui", None), QWidget):
+        return
+    warmup = getattr(app, "_settings_warmup", None)
+    if warmup is None:
+        warmup = app._settings_warmup = _SettingsWarmup(app)
+    if warmup.dialog is None:
+        warmup.schedule()
+
+
 def show_settings_dialog(app, *, settings_layout: str | None = None) -> None:
     """Opens Settings modally; Dev passes ``settings_layout`` to preview the other frames."""
     from PySide6.QtWidgets import QWidget
 
     from steempeg.ui.window_chrome import force_app_cursor_resync
-    import logging
-    import time
-
     opened_at = time.perf_counter()
-    dlg = SettingsDialog(
-        app, parent=getattr(app, "ui", None), settings_layout=settings_layout
-    )
+    warmup = getattr(app, "_settings_warmup", None)
+    dlg = warmup.take() if warmup is not None and settings_layout is None else None
+    prepared = dlg is not None
+    if dlg is None:
+        dlg = SettingsDialog(app, parent=getattr(app, "ui", None), settings_layout=settings_layout)
     built_ms = (time.perf_counter() - opened_at) * 1000
     QTimer.singleShot(0, lambda: logging.info(
-        "Settings opening: build_ms=%.1f first_ui_turn_ms=%.1f",
-        built_ms, (time.perf_counter() - opened_at) * 1000,
+        "Settings opening: prepared=%s build_ms=%.1f first_ui_turn_ms=%.1f",
+        prepared, built_ms, (time.perf_counter() - opened_at) * 1000,
     ))
     app._app_settings_dlg = dlg
     app._app_settings_open = True
@@ -3954,6 +4175,8 @@ def show_settings_dialog(app, *, settings_layout: str | None = None) -> None:
             pass
         QTimer.singleShot(0, force_app_cursor_resync)
         QTimer.singleShot(50, force_app_cursor_resync)
+        if settings_layout is None:
+            schedule_settings_warmup(app)
 
 
 def maybe_show_small_screen_warning(app, ui_shell: str | None = None) -> None:

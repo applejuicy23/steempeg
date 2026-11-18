@@ -7139,6 +7139,13 @@ def main():
             schedule_hidden_handle_pane_restore(window)
             startup_trace("main_window_shown")
             window._startup_measurement.window_shown()
+
+            def _prepare_settings_when_idle():
+                from steempeg.ui.settings_dialog import schedule_settings_warmup
+
+                schedule_settings_warmup(window)
+
+            QTimer.singleShot(1000, _prepare_settings_when_idle)
             try:
                 from steempeg.services.kofi_remote import refresh_kofi_url_async
 

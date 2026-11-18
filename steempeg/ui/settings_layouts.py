@@ -357,8 +357,7 @@ class SettingsRailFrame(QWidget):
 
     def __init__(
         self,
-        pages: list[tuple[str, QWidget]],
-        wrap_in_scroll: Callable[[QWidget], QScrollArea],
+        titles: list[str],
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -366,20 +365,19 @@ class SettingsRailFrame(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.rail, self.buttons = _build_rail([title for title, _page in pages])
+        self.rail, self.buttons = _build_rail(titles)
         self.stack = QStackedWidget()
         self.stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        for index, (_title, page) in enumerate(pages):
-            self.stack.addWidget(wrap_in_scroll(page))
-            self.buttons[index].clicked.connect(
-                lambda _checked=False, i=index: self.stack.setCurrentIndex(i)
-            )
         self.stack.currentChanged.connect(self._check_rail_button)
-        if self.buttons:
-            self.buttons[0].setChecked(True)
 
         layout.addWidget(self.rail)
         layout.addWidget(self.stack, 1)
+
+    def add_page(self, page: QScrollArea) -> None:
+        index = self.stack.addWidget(page)
+        self.buttons[index].clicked.connect(
+            lambda _checked=False, i=index: self.stack.setCurrentIndex(i)
+        )
 
     def _check_rail_button(self, index: int) -> None:
         """Keeps the rail pill in sync when the page changes from the pad or code."""
