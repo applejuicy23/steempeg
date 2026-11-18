@@ -2,23 +2,105 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
 import webbrowser
+from functools import lru_cache
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QFontDatabase, QIcon
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt
+from PySide6.QtGui import QFont, QFontDatabase, QFontMetricsF, QIcon, QPainterPath, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
+    QStyle,
+    QStyleOptionButton,
+    QStylePainter,
     QVBoxLayout,
     QWidget,
 )
 
 KOFI_URL = "https://ko-fi.com/applejuicy23"  # fallback; prefer resolve_kofi_url()
 KOFI_MARK = "kofi.png"
+
+
+@lru_cache(maxsize=8)
+def kofi_cup_pixmap(height: int) -> QPixmap:
+    """Scale the visible cup without the artwork's transparent margins."""
+    from steempeg.infra.paths import get_resource_path
+    from steempeg.ui.icon_assets import _opaque_content_rect
+
+    raw = QPixmap(get_resource_path(KOFI_MARK))
+    if raw.isNull() or height <= 0:
+        return QPixmap()
+    x, y, width, tall = _opaque_content_rect(raw)
+    return raw.copy(x, y, max(width, 1), max(tall, 1)).scaledToHeight(
+        height, Qt.TransformationMode.SmoothTransformation
+    )
+
+
+class KofiSupportButton(QPushButton):
+    """Ko-fi pill with a consistent gap and optical alignment across Qt styles."""
+
+    _GAP = 7
+
+    def __init__(self, text: str, cup_height: int, parent=None):
+        super().__init__(text, parent)
+        register_bundled_fredoka()
+        cup = kofi_cup_pixmap(cup_height)
+        if not cup.isNull():
+            self.setIcon(QIcon(cup))
+            self.setIconSize(cup.size())
+
+    def sizeHint(self) -> QSize:
+        size = super().sizeHint()
+        if self.icon().isNull():
+            return size
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        label = QSize(
+            math.ceil(QFontMetricsF(self.font()).horizontalAdvance(self.text()))
+            + self.iconSize().width() + self._GAP,
+            max(self.fontMetrics().height(), self.iconSize().height()),
+        )
+        return size.expandedTo(self.style().sizeFromContents(
+            QStyle.ContentsType.CT_PushButton, option, label, self
+        ))
+
+    def paintEvent(self, event):  # noqa: N802
+        if self.icon().isNull():
+            super().paintEvent(event)
+            return
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        content = QRectF(self.style().subElementRect(
+            QStyle.SubElement.SE_PushButtonContents, option, self
+        ))
+        text, icon = option.text, QIcon(option.icon)
+        option.text, option.icon = "", QIcon()
+        painter = QStylePainter(self)
+        painter.drawControl(QStyle.ControlElement.CE_PushButton, option)
+
+        glyphs = QPainterPath()
+        glyphs.addText(0, 0, self.font(), text)
+        ink = glyphs.boundingRect()
+        width = self.iconSize().width()
+        height = self.iconSize().height()
+        center = content.center()
+        start = center.x() - (width + self._GAP + ink.width()) / 2
+        icon_rect = QRectF(start, center.y() - height / 2, width, height).toRect()
+        mode = QIcon.Mode.Normal if self.isEnabled() else QIcon.Mode.Disabled
+        icon.paint(painter, icon_rect, mode=mode)
+        painter.setFont(self.font())
+        painter.setPen(option.palette.color(QPalette.ColorRole.ButtonText))
+        # Center the body of the letters. The tails below the baseline (the
+        # two p's in Support) must not lift the whole label above the cup.
+        baseline = icon_rect.y() + icon_rect.height() / 2 - ink.top() / 2
+        text_x = icon_rect.x() + icon_rect.width() + self._GAP - ink.left()
+        painter.drawText(QPointF(text_x, baseline), text)
+
 
 # Ko-fi dashboard vibe — warm cream plate, soft charcoal type.
 _CREAM = "#F9F5F0"
