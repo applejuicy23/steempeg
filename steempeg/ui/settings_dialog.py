@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-from functools import lru_cache
 
 from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QFont, QFontMetrics
@@ -442,9 +441,9 @@ def _pro_kofi_support_stylesheet() -> str:
             color: #3A342E;
             border: 1px solid #E0D5C8;
             border-radius: 18px;
-            padding: 10px 18px 10px 12px;
+            padding: 10px 15px;
             font-family: "Fredoka", "Candara", "Calibri", "Segoe UI", sans-serif;
-            font-size: 13px;
+            font-size: 14px;
             font-weight: 700;
             outline: none;
         }
@@ -456,28 +455,6 @@ def _pro_kofi_support_stylesheet() -> str:
             background-color: #EDE4D8;
         }
     """
-
-
-@lru_cache(maxsize=8)
-def _kofi_cup_pixmap(height: int):
-    """Crop kofi.png to the cup and scale that ink to ``height`` px."""
-    from PySide6.QtGui import QPixmap
-
-    from steempeg.infra.paths import get_resource_path
-    from steempeg.ui.icon_assets import _opaque_content_rect
-
-    raw = QPixmap(get_resource_path("kofi.png"))
-    if raw.isNull() or height <= 0:
-        return QPixmap()
-    x, y, width, tall = _opaque_content_rect(raw)
-    cropped = raw.copy(x, y, max(width, 1), max(tall, 1))
-    target_w = max(1, round(cropped.width() * height / max(cropped.height(), 1)))
-    return cropped.scaled(
-        target_w,
-        height,
-        Qt.AspectRatioMode.KeepAspectRatio,
-        Qt.TransformationMode.SmoothTransformation,
-    )
 
 
 class _PromoKofiMark(QLabel):
@@ -2070,29 +2047,14 @@ class SettingsDialog(SteempegDialog):
         btn_off.setStyleSheet(_pro_action_button_stylesheet())
         btn_off.setToolTip("Hide PRO badge / red splash chrome (settings only).")
         btn_off.clicked.connect(lambda: self._apply_steempeg_pro(False))
-        btn_support = QPushButton("Support on Ko-fi")
+        from steempeg.ui.kofi_dialog import KofiSupportButton, kofi_cup_pixmap
+
+        btn_support = KofiSupportButton("Support on Ko-fi", 16)
         btn_support.setObjectName("ProPromoSupportBtn")
         btn_support.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_support.setStyleSheet(_pro_kofi_support_stylesheet())
         btn_support.setToolTip("Opens the tip URL from steempeg-meta.json on the website.")
         btn_support.clicked.connect(self._on_pro_support_kofi)
-        from steempeg.ui.kofi_dialog import register_bundled_fredoka
-
-        fredoka = register_bundled_fredoka()
-        support_font = QFont()
-        if fredoka:
-            support_font.setFamily(fredoka)
-        else:
-            support_font.setFamilies(["Candara", "Calibri", "Segoe UI"])
-        support_font.setPixelSize(13)
-        support_font.setWeight(QFont.Weight.Bold)
-        btn_support.setFont(support_font)
-        from PySide6.QtGui import QIcon
-
-        cup_btn = _kofi_cup_pixmap(16)
-        if not cup_btn.isNull():
-            btn_support.setIcon(QIcon(cup_btn))
-            btn_support.setIconSize(cup_btn.size())
         btn_row.addWidget(btn_get)
         btn_row.addWidget(btn_off)
         btn_row.addWidget(btn_support)
@@ -2106,7 +2068,7 @@ class SettingsDialog(SteempegDialog):
         # Pitch label is 12px. The cup is cropped to its ink and scaled to that
         # same size so it sits on the link, not above it.
         mark = _PromoKofiMark(self._on_pro_support_kofi, frame)
-        cup = _kofi_cup_pixmap(12)
+        cup = kofi_cup_pixmap(12)
         if not cup.isNull():
             mark.setPixmap(cup)
             mark.setFixedSize(cup.size())
