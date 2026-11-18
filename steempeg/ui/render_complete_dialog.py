@@ -7,7 +7,6 @@ from enum import Enum
 from PySide6.QtCore import Qt, QPoint, Signal
 from PySide6.QtWidgets import QHBoxLayout, QMenu, QPushButton
 
-from steempeg.infra.paths import is_in_default_rendered_videos
 from steempeg.render.queue import JobStatus, RenderJob
 from steempeg.render.queue_display import format_job_output
 from steempeg.ui import ui_theme as ut
@@ -49,12 +48,12 @@ class RenderCompleteDialog(SteempegDialog):
         self.setMinimumWidth(mw)
         self.resize(rw, rh)
         self._choice = RenderCompleteChoice.OK
-        self._output_file = output_file or ""
+        self._output_file = output_file or (job.output_file or "").strip()
 
         self._result_header = ResultHeader("Clip exported successfully", "Your video is ready",
                                            elapsed_seconds=elapsed_seconds)
         self.content_layout.addWidget(self._result_header)
-        out_path = output_file or format_job_output(job)
+        out_path = self._output_file or format_job_output(job)
         self._result_card = ExportResultCard(job, output_file=out_path, cache_dir=cache_dir,
                                             status=JobStatus.COMPLETED)
         self.content_layout.addWidget(self._result_card)
@@ -82,7 +81,7 @@ class RenderCompleteDialog(SteempegDialog):
 
         play_split = PlayVideoSplitButton()
         play_split.play_clicked.connect(lambda: self._pick(RenderCompleteChoice.PLAY))
-        self._setup_play_menu(play_split, out_path)
+        self._setup_play_menu(play_split)
         actions.addWidget(play_split, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.content_layout.addLayout(actions)
@@ -107,32 +106,25 @@ class RenderCompleteDialog(SteempegDialog):
             button.setStyleSheet(ut.about_secondary_button_stylesheet())
         self._play_split.apply_ui_theme_chrome()
 
-    def _setup_play_menu(self, play_split: PlayVideoSplitButton, output_file: str) -> None:
-        in_library = is_in_default_rendered_videos(output_file)
-        play_split.set_menu_enabled(in_library)
-        if in_library:
-            play_split.menu_btn.setToolTip("More play options")
-        else:
-            play_split.menu_btn.setToolTip(
-                "Open in Steempeg is only available when the file is in the rendered_videos folder."
-            )
+    def _setup_play_menu(self, play_split: PlayVideoSplitButton) -> None:
+        # Rendered videos can register an existing export on demand, including
+        # exports outside the default folder and paths with Windows aliases.
+        available = os.path.isfile(self._output_file)
+        play_split.set_menu_enabled(available)
+        if not available:
+            play_split.menu_btn.setToolTip("The exported file is unavailable.")
 
         menu = QMenu(self)
         menu.setStyleSheet(ut.library_menu_stylesheet())
         action_steempeg = menu.addAction("Open in Steempeg")
-        action_steempeg.setEnabled(in_library)
-        if in_library:
-            action_steempeg.setToolTip(
-                "Open the Rendered videos tab and preview this export in Steempeg."
-            )
-        else:
-            action_steempeg.setToolTip(
-                "Only available when the file was saved to the rendered_videos folder."
-            )
+        action_steempeg.setToolTip(
+            "Open the Rendered videos tab and preview this export in Steempeg."
+        )
         action_steempeg.triggered.connect(self._open_in_steempeg)
 
         def _show_menu() -> None:
-            if not in_library:
+            if not os.path.isfile(self._output_file):
+                play_split.set_menu_enabled(False)
                 return
             menu.exec(
                 play_split.menu_btn.mapToGlobal(
