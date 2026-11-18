@@ -1730,6 +1730,8 @@ class SettingsDialog(SteempegDialog):
         from steempeg.ui.widgets.apply_button import ApplyButton
 
         btn_apply = ApplyButton()
+        btn_apply.setObjectName("settingsApplyBtn")
+        btn_apply.setMinimumWidth(86)
         btn_apply.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_apply.clicked.connect(self._apply)
         btn_save = QPushButton("Save")
@@ -2739,7 +2741,10 @@ class SettingsDialog(SteempegDialog):
             ):
                 btn.setStyleSheet(about_accent)
                 continue
-            if btn in (getattr(self, "_btn_cancel", None), getattr(self, "_btn_apply", None)):
+            if btn is getattr(self, "_btn_apply", None):
+                btn.setStyleSheet(about_sec + "QPushButton#settingsApplyBtn { padding: 6px 14px; }")
+                continue
+            if btn is getattr(self, "_btn_cancel", None):
                 btn.setStyleSheet(about_sec)
                 continue
             btn.setStyleSheet(sec_qss)
