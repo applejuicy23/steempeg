@@ -1484,7 +1484,7 @@ class SettingsDialog(SteempegDialog):
         scan_row.setSpacing(8)
         scan_lbl = QLabel("On launch")
         scan_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
-        from steempeg.ui.widgets.startup_mode_guide import StartupModeCombo, STARTUP_HELP
+        from steempeg.ui.widgets.startup_mode_guide import MODE_SUMMARIES, STARTUP_HELP, StartupModeCombo
         from steempeg.ui.startup_metrics import StartupTimeLabel
 
         self._combo_startup_scan = StartupModeCombo()
@@ -1500,7 +1500,17 @@ class SettingsDialog(SteempegDialog):
         self._startup_mode_hint = startup_hint
         p.addWidget(startup_hint)
         startup_hint.set_help_diagram("startup_mode", lambda: self._combo_startup_scan.currentData())
-        self._combo_startup_scan.currentIndexChanged.connect(lambda: startup_hint.refresh_diagram())
+        summary = QLabel()
+        summary.setStyleSheet(_HINT)
+        summary.setWordWrap(True)
+        p.addWidget(summary)
+
+        def refresh_startup_mode():
+            summary.setText(MODE_SUMMARIES.get(self._combo_startup_scan.currentData(), ""))
+            startup_hint.refresh_diagram()
+
+        self._combo_startup_scan.currentIndexChanged.connect(refresh_startup_mode)
+        refresh_startup_mode()
         self._startup_time_label = StartupTimeLabel(app)
         self._startup_time_label.setStyleSheet(_HINT)
         p.addWidget(self._startup_time_label)

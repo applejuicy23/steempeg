@@ -15,20 +15,25 @@ STARTUP_HELP = (
 )
 MODES = {
     "progressive": ("Progressive", 4,
-        "Finds clips with lightweight discovery and builds cards as you scroll. "
-        "The first screen is prepared first; remaining cards and metadata load as needed. "
-        "Fastest way to start using the library."),
+        "Recommended for everyday use. The first screen loads first, and cards along "
+        "the path you scroll finish in the background."),
     "quick": ("Quick", 3,
         "Scans folders and uses cached health or lightweight checks, without ffprobe. "
-        "Every ClipCard is prepared before the library is ready. A balance of startup speed and readiness."),
+        "Every card is ready before you start browsing."),
     "full": ("Full", 2,
         "Rechecks every clip, including ffprobe health checks, and prepares all ClipCards. "
         "Steam names and icons refresh in the background. The most thorough scan; "
         "also used for the first folder discovery and manual Refresh."),
     "cache": ("Skip", 2,
-        "Restores the last saved library list and builds cards from that snapshot, "
-        "without a full rescan. New clips are checked separately afterwards. "
-        "Restoring a large library can still take time, especially on a slower disk."),
+        "Use when your library is mostly unchanged. Restores the saved list first, "
+        "then recovers missing previews and checks for new clips in the background."),
+}
+
+MODE_SUMMARIES = {
+    "progressive": "Recommended · Start browsing while cards load.",
+    "quick": "Light checks · All cards are ready before browsing.",
+    "full": "Deep health check · Use when clips need rechecking.",
+    "cache": "Restore the saved list · Previews and new clips follow.",
 }
 
 
