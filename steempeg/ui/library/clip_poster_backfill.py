@@ -16,7 +16,6 @@ class ClipPosterBackfillWorker(QThread):
     """Generate missing clip posters one at a time (ffmpeg is heavy)."""
 
     poster_ready = Signal(str, str)  # clip_path, thumb_path
-    finished_batch = Signal()
 
     def __init__(self, clip_paths: list[str], cache_dir: str, parent=None):
         super().__init__(parent)
@@ -34,10 +33,12 @@ class ClipPosterBackfillWorker(QThread):
             steam_thumb = find_clip_thumbnail(clip_path)
             if steam_thumb:
                 self.poster_ready.emit(clip_path, steam_thumb)
+                time.sleep(0.025)
                 continue
             cached = clip_poster_cache_path(self._cache_dir, clip_path)
             if os.path.isfile(cached) and os.path.getsize(cached) > 0:
                 self.poster_ready.emit(clip_path, cached)
+                time.sleep(0.025)
                 continue
             thumb = extract_clip_poster_frame(clip_path, self._cache_dir)
             if thumb:
@@ -46,4 +47,3 @@ class ClipPosterBackfillWorker(QThread):
             if self.isInterruptionRequested():
                 break
             time.sleep(0.05)
-        self.finished_batch.emit()

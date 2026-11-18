@@ -829,6 +829,9 @@ class ClipCard(qtw.QWidget):
         self.clear_chrome_hover()
         super().hideEvent(event)
 
+    def has_thumbnail(self) -> bool:
+        return self._thumb_raw is not None
+
     def set_thumbnail(self, thumb_path: str) -> None:
         if thumb_path and os.path.exists(thumb_path):
             pixmap = qtg.QPixmap(thumb_path)

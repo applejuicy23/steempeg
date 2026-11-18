@@ -105,6 +105,8 @@ _CLIP_VIEWPORT_BUDGET_S = .009
 _CLIP_VIEWPORT_GAP_MS = 16
 _CLIP_VIEWPORT_SCROLL_MS = 32
 _CLIP_SELECTION_PRIORITY_S = .04
+_CLIP_EAGER_CARD_BUDGET_S = .012
+_CLIP_EAGER_CARD_GAP_MS = 4
 # Finish previously seen cards one at a time once scrolling settles.
 _CLIP_IDLE_FILL_GAP_MS = 32
 _CLIP_IDLE_FILL_START_MS = 100
@@ -1122,13 +1124,14 @@ class LibraryMixin:
             self._library_scan_worker = None
 
     def _stop_clip_poster_backfill(self):
+        self._clip_poster_pending = []
         worker = getattr(self, "_clip_poster_worker", None)
+        self._clip_poster_worker = None
         if worker is None:
             return
         if worker.isRunning():
             worker.requestInterruption()
             worker.wait(3000)
-        self._clip_poster_worker = None
 
     def _clips_filtered_table_paths(self) -> list[str]:
         """Clip paths that pass the current filter (non-hidden table rows).
@@ -1172,35 +1175,24 @@ class LibraryMixin:
                 tail.append(path)
         return head + tail
 
-    def _schedule_clip_poster_backfill(self, *, skip_ui_probe: bool = False):
-        """Generate ffmpeg posters for missing thumbs — never during Progressive.
-
-        Progressive is viewport-only: disk thumbs at materialize time, no ffmpeg
-        storm in the background (that was the marquee/UI stutter).
-        """
-        del skip_ui_probe
+    def _schedule_clip_poster_backfill(self, *, include_hidden: bool = False):
+        """Resolve missing card previews on the existing background poster worker."""
         if getattr(self, "_clips_progressive_active", False):
             return
-        if not hasattr(self, "cache_dir") or not hasattr(self.ui, "table_clips"):
+        grid = getattr(self, "grid_clips", None)
+        if grid is None or not hasattr(self, "cache_dir"):
             return
 
-        live = getattr(self, "_clip_live_paths", None)
-        if not isinstance(live, set) or not live:
-            return
-        candidates = [
-            p
-            for p in self._clips_filtered_table_paths()
-            if os.path.normcase(os.path.normpath(p)) in live
-        ]
         missing: list[str] = []
-        for clip_path in candidates:
-            if not os.path.isdir(clip_path):
+        for row in range(grid.count()):
+            item = grid.item(row)
+            if item.isHidden() and not include_hidden:
                 continue
-            if resolve_clip_thumbnail(clip_path, self.cache_dir, allow_generate=False):
-                continue
-            missing.append(clip_path)
-        if missing:
-            self._enqueue_clip_poster_paths(missing)
+            card = grid.itemWidget(item)
+            path = item.data(Qt.UserRole + 1)
+            if path and isinstance(card, ClipCard) and not card.has_thumbnail():
+                missing.append(str(path))
+        self._enqueue_clip_poster_paths(missing)
 
     def _enqueue_clip_poster_paths(
         self, paths: list[str], *, allow_progressive_live: bool = False
@@ -1236,9 +1228,6 @@ class LibraryMixin:
                 continue
             seen.add(key)
             pending.append(path)
-        worker = getattr(self, "_clip_poster_worker", None)
-        if worker is not None and worker.isRunning():
-            return
         self._pump_clip_poster_queue()
 
     def _pump_clip_poster_queue(self) -> None:
@@ -1246,27 +1235,24 @@ class LibraryMixin:
         pending = getattr(self, "_clip_poster_pending", None)
         if not isinstance(pending, list) or not pending:
             return
-        if not hasattr(self, "cache_dir"):
+        if not hasattr(self, "cache_dir") or getattr(self, "_clip_poster_worker", None) is not None:
             return
         # Progressive: only drain paths already queued as live-viewport exceptions.
         # (Full-shelf storms still blocked at _enqueue without allow_progressive_live.)
         batch = pending[:5]
         del pending[:5]
-        self._stop_clip_poster_backfill()
         self._clip_poster_worker = ClipPosterBackfillWorker(
             batch, self.cache_dir, self.ui
         )
         self._clip_poster_worker.poster_ready.connect(self._on_clip_poster_ready)
-        self._clip_poster_worker.finished_batch.connect(self._on_clip_poster_batch_done)
+        self._clip_poster_worker.finished.connect(self._on_clip_poster_batch_done)
+        self._clip_poster_worker.finished.connect(self._clip_poster_worker.deleteLater)
         self._clip_poster_worker.start()
 
     def _on_clip_poster_ready(self, clip_path: str, thumb_path: str):
-        if not hasattr(self, "grid_clips"):
+        if self.sender() is not getattr(self, "_clip_poster_worker", None):
             return
-        QTimer.singleShot(
-            0,
-            lambda p=clip_path, t=thumb_path: self._apply_clip_poster_thumb(p, t),
-        )
+        self._apply_clip_poster_thumb(clip_path, thumb_path)
 
     def _apply_clip_poster_thumb(self, clip_path: str, thumb_path: str) -> None:
         if not hasattr(self, "grid_clips"):
@@ -1298,14 +1284,16 @@ class LibraryMixin:
                             title_item.data(_CLIP_HEALTH_ROLE)
                             == health.ClipHealth.DEAD.value
                         )
-                card.set_unavailable(dead=is_dead, no_preview=False)
+                card.set_unavailable(dead=is_dead, no_preview=not card.has_thumbnail())
             break
 
     def _on_clip_poster_batch_done(self):
+        if self.sender() is not getattr(self, "_clip_poster_worker", None):
+            return
         self._clip_poster_worker = None
         pending = getattr(self, "_clip_poster_pending", None)
         if isinstance(pending, list) and pending:
-            QTimer.singleShot(200, self._pump_clip_poster_queue)
+            QTimer.singleShot(100, self._pump_clip_poster_queue)
 
     @staticmethod
     def _folder_has_dash_recording(folder_path: str, max_depth: int = 4) -> bool:
@@ -4928,14 +4916,12 @@ class LibraryMixin:
 
             # Progressive / Skip: disk thumbs only — never ffmpeg-generate here.
             progressive = bool(getattr(self, "_clips_progressive_active", False))
-            if progressive or getattr(self, "_scan_snapshot_restore", False):
-                if progressive and os.path.exists(str(clip_path)):
-                    # No Steam folder walk on UI — canonical thumb + poster cache.
-                    thumb_path = resolve_clip_thumbnail_ui_safe(
-                        str(clip_path), getattr(self, "cache_dir", None)
-                    )
-                else:
-                    thumb_path = self._snapshot_local_poster_only(str(clip_path))
+            if getattr(self, "_scan_snapshot_restore", False):
+                thumb_path = self._snapshot_local_poster_only(str(clip_path))
+            elif progressive or getattr(self, "_clips_eager_cards_pending", False):
+                thumb_path = resolve_clip_thumbnail_ui_safe(
+                    str(clip_path), getattr(self, "cache_dir", None)
+                )
             elif os.path.exists(str(clip_path)):
                 thumb_path = resolve_clip_thumbnail(
                     str(clip_path), self.cache_dir, allow_generate=False
@@ -4982,13 +4968,12 @@ class LibraryMixin:
         if title_item is not None and not title_item.data(_CLIP_CURED_ROLE):
             level = title_item.data(_CLIP_HEALTH_ROLE)
             is_dead = level == health.ClipHealth.DEAD.value
-        has_thumb = bool(thumb_path and os.path.exists(thumb_path))
         if getattr(self, "_scan_snapshot_restore", False) and not getattr(
             self, "_clips_progressive_active", False
         ):
             card.set_unavailable(dead=is_dead, no_preview=False)
         else:
-            card.set_unavailable(dead=is_dead, no_preview=not has_thumb)
+            card.set_unavailable(dead=is_dead, no_preview=not card.has_thumbnail())
         # setItemWidget shows the card at its current pos — place it first, or every
         # idle-fill card flashes at (0, 0) over the first card and steals its hover.
         card.setGeometry(self.grid_clips.visualItemRect(item))
@@ -5652,22 +5637,39 @@ class LibraryMixin:
             self._publish_deferred_scan_grid_rows()
             self._stop_clips_idle_fill()
             self._clips_progressive_active = False
+            self._scan_eager_card_cursor = 0
+            if grid is not None and grid.count():
+                if hasattr(self, "update_status_indicator"):
+                    self.update_status_indicator(
+                        f"Preparing cards 0/{grid.count()} (0%)", "busy", scan_phase="loading"
+                    )
+                QTimer.singleShot(
+                    _CLIP_EAGER_CARD_GAP_MS,
+                    lambda: self._prepare_all_scan_cards(stats, generation, announce_duplicates),
+                )
+                return
             cursor = 0
-        built = 0
         total = grid.count() if grid is not None else 0
-        while cursor < total and built < 4:
+        previous = cursor
+        deadline = time.perf_counter() + _CLIP_EAGER_CARD_BUDGET_S
+        while cursor < total:
             item = grid.item(cursor)
             if grid.itemWidget(item) is None:
                 self._attach_clip_card_to_grid_item(item)
-                built += 1
             cursor += 1
+            if time.perf_counter() >= deadline:
+                break
         self._scan_eager_card_cursor = cursor
         if cursor < total:
-            if hasattr(self, "update_status_indicator"):
+            if cursor * 25 // total != previous * 25 // total and hasattr(self, "update_status_indicator"):
                 self.update_status_indicator(
-                    f"Preparing cards {cursor}/{total}", "busy", scan_phase="loading"
+                    f"Preparing cards {cursor}/{total} ({cursor * 100 / total:.1f}%)",
+                    "busy", scan_phase="loading",
                 )
-            QTimer.singleShot(16, lambda: self._prepare_all_scan_cards(stats, generation, announce_duplicates))
+            QTimer.singleShot(
+                _CLIP_EAGER_CARD_GAP_MS,
+                lambda: self._prepare_all_scan_cards(stats, generation, announce_duplicates),
+            )
             return
         self._clips_eager_cards_pending = False
         self._scan_eager_card_cursor = None
@@ -6647,7 +6649,14 @@ class LibraryMixin:
         # critical path (same for duration / poster top-ups below).
         QTimer.singleShot(1500, self._persist_clips_library_snapshot)
 
-        # Background only — no poster/duration storm (stuttered ClipCard marquees).
+        # Skip initially uses local path-keyed posters. Steam thumbnails and older
+        # mtime-keyed posters are recovered after the shell can paint and respond.
+        generation = self._scan_generation
+        QTimer.singleShot(
+            350,
+            lambda: self._schedule_clip_poster_backfill(include_hidden=True)
+            if generation == self._scan_generation else None,
+        )
         if want_append:
             QTimer.singleShot(2500, self._append_new_clips_only)
         return True
