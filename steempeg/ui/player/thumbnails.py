@@ -1,8 +1,8 @@
 """Background worker threads that produce video thumbnails.
 
-PreviewSniperWorker decodes single DASH chunks with PyAV on demand to feed the
+PreviewSniperWorker decodes single DASH chunks on demand to feed the
 timeline's hover preview. After the tip is shown, a tip-sized JPEG is written
-under ``cache/timeline_previews/`` so a revisit skips PyAV. (Full source-res
+under ``cache/timeline_previews/`` so a revisit skips decoding. (Full source-res
 encode on the decode path was too expensive — +20–60 ms on first hit.)
 ThumbnailBatchThread shells out to ffmpeg once per clip to render the full
 strip of timeline thumbnails.
@@ -15,12 +15,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import xml.etree.ElementTree as ET
-
-import av
 
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QImage, QPixmap
@@ -185,7 +184,12 @@ class PreviewSniperWorker(QThread):
         proc = self._ffmpeg_proc
         self._ffmpeg_proc = None
         if proc is not None:
-            _kill_process_tree(proc, label="sniper-ffmpeg")
+            # This is a single FFmpeg child. Signal it immediately and let the
+            # worker drain its pipes and reap it without waiting in Qt.
+            try:
+                proc.kill()
+            except OSError:
+                _log.debug("Could not stop sniper FFmpeg", exc_info=True)
 
     def kill_worker(self):
         if self.cache or self._in_flight_sec >= 0:
@@ -401,13 +405,19 @@ class PreviewSniperWorker(QThread):
             return None
         if self._is_killed:
             return None
-        gen = self._decode_gen
+        return self._run_sniper_ffmpeg(
+            ["-ss", str(max(0, sec)), "-i", media_path],
+            media_path, sec, self._decode_gen,
+        )
+
+    def _run_sniper_ffmpeg(self, input_args, media_path, sec, gen, *, data=None):
+        if self._is_killed or gen != self._decode_gen:
+            return None
         cmd = [
             resolve_ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", ffmpeg_cli_loglevel(),
-            "-ss", str(max(0, sec)),
-            "-i", media_path,
+            "-threads", "2", *input_args,
             "-frames:v", "1",
-            "-vf", "scale=160:90",
+            "-vf", f"scale={_SNIPER_W}:{_SNIPER_H}",
             "-f", "image2pipe", "-vcodec", "mjpeg", "-",
         ]
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -417,25 +427,27 @@ class PreviewSniperWorker(QThread):
         try:
             proc = subprocess.Popen(
                 cmd,
+                stdin=subprocess.PIPE if data is not None else subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 creationflags=creationflags,
             )
             self._ffmpeg_proc = proc
             deadline = time.monotonic() + 8.0
-            while proc.poll() is None:
+            pending_input = data
+            while True:
                 if self._is_killed or gen != self._decode_gen:
-                    self._kill_ffmpeg_subprocess()
                     return None
                 if time.monotonic() > deadline:
-                    self._kill_ffmpeg_subprocess()
                     _log.info("Sniper ffmpeg timeout sec=%s file=%s", sec, os.path.basename(media_path))
                     return None
-                time.sleep(0.05)
-            stdout = proc.stdout.read() if proc.stdout else b""
-            if proc.stderr:
-                proc.stderr.read()
-            self._ffmpeg_proc = None
+                try:
+                    stdout, _ = proc.communicate(input=pending_input, timeout=0.1)
+                    break
+                except subprocess.TimeoutExpired:
+                    pending_input = None  # communicate resumes draining the same pipes
+            if self._is_killed or gen != self._decode_gen:
+                return None
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             if proc.returncode != 0 or not stdout:
                 _log.info(
@@ -453,7 +465,6 @@ class PreviewSniperWorker(QThread):
             )
             return QPixmap.fromImage(qimg)
         except Exception as exc:
-            self._kill_ffmpeg_subprocess()
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             _log.info(
                 "Sniper ffmpeg error sec=%s (%.0fms) file=%s: %s",
@@ -463,6 +474,16 @@ class PreviewSniperWorker(QThread):
         finally:
             if proc is not None and self._ffmpeg_proc is proc:
                 self._ffmpeg_proc = None
+            if proc is not None:
+                try:
+                    if proc.poll() is None:
+                        proc.kill()
+                    proc.wait(timeout=1)
+                except (OSError, subprocess.TimeoutExpired):
+                    _log.debug("Could not reap sniper FFmpeg", exc_info=True)
+                for pipe in (proc.stdin, proc.stdout, proc.stderr):
+                    if pipe is not None:
+                        pipe.close()
 
     def parse_mpd(self, mpd_path):
         self.base_dir = os.path.dirname(mpd_path)
@@ -614,6 +635,16 @@ class PreviewSniperWorker(QThread):
             if self._is_killed or gen != self._decode_gen:
                 return None
 
+            if sys.platform == "win32":
+                # PyAV codec finalizers can run during Python GC on the Qt
+                # thread. Keep Windows thumbnail codec teardown in a child.
+                return self._run_sniper_ffmpeg(
+                    ["-f", "mov", "-i", "pipe:0"], chunk_path, sec, gen,
+                    data=init_bytes + chunk_bytes,
+                )
+
+            import av
+
             ram_buffer = io.BytesIO(init_bytes + chunk_bytes)
             container = av.open(ram_buffer)
 
@@ -659,6 +690,8 @@ class PreviewSniperWorker(QThread):
         t0 = time.perf_counter()
         container = None
         try:
+            import av
+
             container = av.open(media_path)
             if not container.streams.video:
                 return None
@@ -699,10 +732,11 @@ class PreviewSniperWorker(QThread):
                     pass
 
     def _decode_plain_file_frame(self, media_path: str, sec: int):
-        """Hover frame for finished exports — PyAV first, ffmpeg fallback."""
-        pixmap = self._decode_frame_av_file(media_path, sec)
-        if pixmap is not None and not pixmap.isNull():
-            return pixmap
+        """Use FFmpeg on Windows and retain PyAV with FFmpeg fallback elsewhere."""
+        if sys.platform != "win32":
+            pixmap = self._decode_frame_av_file(media_path, sec)
+            if pixmap is not None and not pixmap.isNull():
+                return pixmap
         return self._decode_frame_ffmpeg(media_path, sec)
 
     def _neighbor_buckets(self, sec: int) -> list[int]:
