@@ -23,6 +23,7 @@ from PySide6.QtCore import (
     QTimer,
     QItemSelection,
     QItemSelectionModel,
+    QPersistentModelIndex,
 )
 from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
@@ -97,23 +98,20 @@ _CLIP_CARD_FADE_IN_MS = 220
 _CLIP_CARD_CASCADE_STEP_MS = 18
 _CLIP_CARD_CASCADE_MAX_MS = 220
 _CLIP_CARD_CASCADE_WINDOW_S = 0.25
-_CLIP_VIEWPORT_OVERSCAN_PX = 220
 _CLIP_SCROLL_IDLE_MS = 120
-# How many on-screen cards one tick may build. A 2K pane of big cards is about
-# a dozen; medium and small pack more into the same pixels, and building every
-# one of those in a single tick hitches startup. The rest of the visible rows
-# follow on the next short gap. Cards below the fold stay on the idle fill.
-_CLIP_VIEWPORT_FILL_CAP = 24
-_CLIP_VIEWPORT_GAP_MS = 20
-# Quiet background materialize while the user is idle / watching a clip.
-# One card + long gap = invisible; scroll always wins (idle fill stops).
-_CLIP_IDLE_FILL_CHUNK = 1
-_CLIP_IDLE_FILL_GAP_MS = 110
-_CLIP_IDLE_FILL_START_MS = 480
+# Creating a real card can include a cold thumbnail read. Stop after a short
+# time slice rather than assuming a fixed number of cards is cheap.
+_CLIP_VIEWPORT_BUDGET_S = .009
+_CLIP_VIEWPORT_GAP_MS = 16
+_CLIP_VIEWPORT_SCROLL_MS = 32
+_CLIP_SELECTION_PRIORITY_S = .04
+# Finish previously seen cards one at a time once scrolling settles.
+_CLIP_IDLE_FILL_GAP_MS = 32
+_CLIP_IDLE_FILL_START_MS = 100
 
 
-class _GridViewportResizeFilter(QObject):
-    """Refill the clips shelf when the pane is shown or gets its real size.
+class _ClipsViewportFilter(QObject):
+    """Refill the clips shelf on resize and remember the views Qt paints.
 
     Progressive discover finishes while the shell is still hidden. That pass
     sees a short viewport (about three big rows) and used to treat it as the
@@ -124,9 +122,20 @@ class _GridViewportResizeFilter(QObject):
         super().__init__(parent)
         self._host = host
         self._last_size = None
+        self.wheel_input = QTimer(self)
+        self.wheel_input.setSingleShot(True)
 
     def eventFilter(self, obj, event):
         kind = event.type()
+        if kind == QEvent.Type.Wheel:
+            # Wheel scrolling is handled synchronously by the view or bar.
+            self.wheel_input.start(0)
+        elif kind == QEvent.Type.MouseButtonPress:
+            self.wheel_input.stop()
+        if obj is not self.parent():
+            if kind == QEvent.Type.Paint:
+                self._host._remember_painted_clips()
+            return False
         if kind == QEvent.Type.Show:
             note = getattr(self._host, "_clips_note_pane_shown", None)
             if callable(note):
@@ -2651,6 +2660,7 @@ class LibraryMixin:
         """
         mods = self._event_modifiers(event)
         self._clips_card_select_gen = getattr(self, "_clips_card_select_gen", 0) + 1
+        self._clips_selection_priority_until = time.monotonic() + _CLIP_SELECTION_PRIORITY_S
         # Invalidate any pending open immediately so spam-clicks don't start a
         # stale load while the new selection is still queued.
         self._cancel_pending_clips_preview()
@@ -3202,7 +3212,8 @@ class LibraryMixin:
         """Freshly printed on-screen cards appear in a short cascade instead of popping."""
         # Scan inserts arrive throughout the fade. Keep the first painted shelf
         # opaque while Full / Quick is still appending rows behind it.
-        if getattr(self, "_clips_scan_active", False):
+        if (getattr(self, "_clips_scan_active", False)
+                or getattr(self, "_clips_scroll_active", False)):
             return
         grid = getattr(self, "grid_clips", None)
         if grid is None or not grid.isVisible():
@@ -5863,7 +5874,7 @@ class LibraryMixin:
     # ----- Progressive library load (viewport-lazy ClipCards) -----
 
     def _ensure_clips_viewport_lazy_hooks(self) -> None:
-        """Install scroll-idle viewport refresh once (Screenshots pattern)."""
+        """Install the scroll and resize hooks for viewport filling once."""
         grid = getattr(self, "grid_clips", None)
         if grid is None:
             return
@@ -5876,21 +5887,27 @@ class LibraryMixin:
         self._clips_viewport_timer = idle
         self._clips_scroll_active = False
         self._clip_live_paths = set()
-        bar = grid.verticalScrollBar()
-        if bar is not None:
-            bar.valueChanged.connect(self._on_clips_scroll)
-            bar.rangeChanged.connect(self._on_clips_scroll_range)
         # Discover runs before ShowWindow. The grid's Show (not only a later
         # resize) is what reveals the real 2K pane.
-        filt = _GridViewportResizeFilter(self, grid)
-        grid.installEventFilter(filt)
+        filt = _ClipsViewportFilter(self, grid)
+        self._reset_clips_seen()
+        self._clips_scroll_offset = grid.verticalOffset()
         self._clips_viewport_resize_filter = filt
+        grid.installEventFilter(filt)
+        grid.viewport().installEventFilter(filt)
+        bar = grid.verticalScrollBar()
+        if bar is not None:
+            bar.installEventFilter(filt)
+            bar.valueChanged.connect(self._on_clips_scroll)
+            bar.rangeChanged.connect(self._on_clips_scroll_range)
+        grid.model().modelReset.connect(self._reset_clips_seen)
         self._clips_viewport_hooks_installed = True
 
     def _on_clips_scroll_range(self, *_args) -> None:
         """Sheet open / layout grow — scrollbar appears without a wheel tick."""
         if not getattr(self, "_clips_progressive_active", False):
             return
+        self._clips_last_painted_view = None
         if getattr(self, "_clips_scan_active", False) and self._clips_first_screen_filled():
             # Range grows on every inserted row during Refresh — not a real resize.
             return
@@ -5899,7 +5916,7 @@ class LibraryMixin:
             # on every batch. The scan flush already asked for a fill.
             self._schedule_clips_viewport_refresh(0, keep=True)
             return
-        self._schedule_clips_viewport_refresh(50)
+        self._schedule_clips_viewport_refresh(50, keep=True)
 
     def _stop_progressive_clips_discover(self) -> None:
         worker = getattr(self, "_progressive_clips_worker", None)
@@ -6041,7 +6058,7 @@ class LibraryMixin:
                 grid.setUpdatesEnabled(True)
         if hasattr(self, "_update_library_count_label"):
             self._update_library_count_label()
-        self._schedule_clips_viewport_refresh(50)
+        self._schedule_clips_viewport_refresh(50, keep=True)
         self._schedule_clip_card_edge_sync()
 
     def _on_progressive_clips_finished(self, total: int) -> None:
@@ -6114,7 +6131,7 @@ class LibraryMixin:
         QTimer.singleShot(2000, self._persist_clips_library_snapshot)
         QTimer.singleShot(80, self._schedule_clip_card_edge_sync)
         # One rematerialize — the old 0+120ms double pass fought marquees.
-        QTimer.singleShot(0, self._clips_refresh_viewport)
+        self._schedule_clips_viewport_refresh(0)
         QTimer.singleShot(500, self._schedule_clip_duration_backfill)
         startup_trace("progressive_post_settle:scheduled")
 
@@ -6136,19 +6153,58 @@ class LibraryMixin:
 
     def _on_clips_scroll(self, *_args) -> None:
         self._schedule_clip_card_edge_sync()
+        grid = self.grid_clips
+        offset = grid.verticalOffset()
+        previous = self._clips_scroll_offset
+        self._clips_scroll_offset = offset
         if not getattr(self, "_clips_progressive_active", False):
             return
+        bar = grid.verticalScrollBar()
+        if (grid.isVisible() and not getattr(self, "_clips_scan_active", False)
+                and (bar.isSliderDown() or self._clips_viewport_resize_filter.wheel_input.isActive())):
+            start = min(previous, offset)
+            end = max(previous, offset) + grid.viewport().height()
+            ranges = self._clips_traversed_ranges
+            if ranges and start <= ranges[-1][1] and end >= ranges[-1][0]:
+                lo, hi = ranges[-1]
+                ranges[-1] = (min(start, lo), max(end, hi))
+            else:
+                ranges.append((start, end))
         self._clips_scroll_active = True
         self._stop_clips_idle_fill()
         timer = getattr(self, "_clips_viewport_timer", None)
         if timer is not None:
             timer.start()
+        self._schedule_clips_viewport_refresh(_CLIP_VIEWPORT_SCROLL_MS, keep=True)
 
     def _clips_on_scroll_idle(self) -> None:
         self._clips_scroll_active = False
-        self._clips_refresh_viewport()
-        # Viewport first; quiet shelf fill resumes after a beat.
-        self._schedule_clips_idle_fill(delay_ms=_CLIP_IDLE_FILL_START_MS)
+        self._schedule_clips_viewport_refresh(0, keep=True)
+
+    def _reset_clips_seen(self) -> None:
+        self._clips_seen_pending = {}
+        self._clips_last_painted_view = None
+        self._clips_traversed_ranges = []
+        self._clips_scroll_offset = 0
+
+    def _remember_painted_clips(self) -> None:
+        if (not getattr(self, "_clips_progressive_active", False)
+                or getattr(self, "_clips_scan_active", False)):
+            return
+        grid = self.grid_clips
+        # Remember the actual endpoints, including jumps and programmatic scrolls.
+        view = (grid.verticalScrollBar().value(), grid.viewport().size(), grid.count())
+        if view == self._clips_last_painted_view:
+            return
+        self._clips_last_painted_view = view
+        self._queue_clips_seen(self._clips_visible_items())
+
+    def _queue_clips_seen(self, items) -> None:
+        grid = self.grid_clips
+        for item in items:
+            if grid.itemWidget(item) is None:
+                index = QPersistentModelIndex(grid.indexFromItem(item))
+                self._clips_seen_pending[index] = None
 
     def _stop_clips_idle_fill(self) -> None:
         timer = getattr(self, "_clips_idle_fill_timer", None)
@@ -6156,8 +6212,9 @@ class LibraryMixin:
             timer.stop()
 
     def _schedule_clips_idle_fill(self, delay_ms: int | None = None) -> None:
-        """Slowly materialize off-screen ClipCards while the user is idle."""
-        if not getattr(self, "_clips_progressive_active", False):
+        """Slowly materialize pending ClipCards from previously painted views."""
+        if (not getattr(self, "_clips_progressive_active", False)
+                or not getattr(self, "_clips_seen_pending", None)):
             return
         # The visible shelf is still waiting for the real pane. A drip here is
         # the "six cards, then the rest a second later" startup.
@@ -6188,33 +6245,21 @@ class LibraryMixin:
         grid = getattr(self, "grid_clips", None)
         if grid is None:
             return
-        viewport = grid.viewport()
-        pointer_in_shelf = bool(
-            viewport is not None and viewport.isVisible()
-            and viewport.rect().contains(viewport.mapFromGlobal(QCursor.pos()))
-        )
-        if (pointer_in_shelf or getattr(self, "_is_switching", False)
-                or getattr(self, "_awaiting_first_frame", False)
-                or getattr(self, "_opening_clip_path", None)
-                or getattr(self, "_pending_quality_populate", None)
-                or getattr(self, "_deferred_quality_populate", None)):
+        if time.monotonic() < getattr(self, "_clips_selection_priority_until", 0.0):
             self._schedule_clips_idle_fill(delay_ms=_CLIP_IDLE_FILL_START_MS)
             return
-        # Keep going while watching a clip or just sitting on Clips — shelf
-        # warms in the background so the next scroll already has cards.
-        filled = 0
-        for i in range(grid.count()):
-            if filled >= _CLIP_IDLE_FILL_CHUNK:
-                break
-            item = grid.item(i)
-            if item is None or item.isHidden():
+        while self._clips_seen_pending:
+            index = next(iter(self._clips_seen_pending))
+            del self._clips_seen_pending[index]
+            item = grid.item(index.row()) if index.isValid() else None
+            if item is None or item.isHidden() or grid.itemWidget(item) is not None:
                 continue
-            if grid.itemWidget(item) is not None:
-                continue
+            started = time.perf_counter()
             self._materialize_clip_grid_item(item)
-            filled += 1
-        if filled:
-            self._schedule_clips_idle_fill(delay_ms=_CLIP_IDLE_FILL_GAP_MS)
+            # Give slower machines more time to process input between cards.
+            gap = max(_CLIP_IDLE_FILL_GAP_MS, round((time.perf_counter() - started) * 3000))
+            self._schedule_clips_idle_fill(delay_ms=gap)
+            break
 
     def _schedule_clips_viewport_refresh(self, delay_ms: int = 0, *, keep: bool = False) -> None:
         """Queue a viewport fill. ``keep`` leaves an armed timer alone.
@@ -6356,16 +6401,14 @@ class LibraryMixin:
             out.append(item)
         return out
 
-    def _clips_visible_items(self) -> list:
+    def _clips_visible_items(self, areas: list[QRect] | None = None) -> list:
         grid = getattr(self, "grid_clips", None)
         if grid is None:
             return []
         vp = grid.viewport()
         if vp is None:
             return []
-        area = vp.rect().adjusted(
-            0, -_CLIP_VIEWPORT_OVERSCAN_PX, 0, _CLIP_VIEWPORT_OVERSCAN_PX
-        )
+        primary, *other = [vp.rect()] if areas is None else areas
         out = []
         for i in range(grid.count()):
             item = grid.item(i)
@@ -6374,31 +6417,9 @@ class LibraryMixin:
             idx = grid.indexFromItem(item)
             if not idx.isValid():
                 continue
-            if area.intersects(grid.visualRect(idx)):
+            rect = grid.visualRect(idx)
+            if primary.intersects(rect) or any(area.intersects(rect) for area in other):
                 out.append(item)
-        if grid.count() <= 0:
-            return out
-        cols_fn = getattr(self, "_clip_grid_column_count_for", None)
-        cols = int(cols_fn(grid)) if callable(cols_fn) else 6
-        cols = max(1, cols)
-        cell_h = max(1, _clips_card_cell_size(self).height() + max(0, int(grid.spacing())))
-        # Mid size-change reflow viewport can briefly report height 0 — still
-        # seed a first screen so cards are not left as invisible placeholders.
-        vp_h = max(1, int(vp.height()))
-        rows = max(2, (vp_h + _CLIP_VIEWPORT_OVERSCAN_PX) // cell_h + 1)
-        expect = min(grid.count(), cols * rows)
-        if len(out) >= expect:
-            return out
-        # Seed by filtered (non-hidden) order — never pull hidden placeholders
-        # just because they sit early in the raw grid index list.
-        seen = {id(item) for item in out}
-        for i in range(grid.count()):
-            if len(out) >= expect:
-                break
-            item = grid.item(i)
-            if item is not None and not item.isHidden() and id(item) not in seen:
-                out.append(item)
-                seen.add(id(item))
         return out
 
     def _materialize_clip_grid_item(self, item) -> ClipCard | None:
@@ -6408,22 +6429,14 @@ class LibraryMixin:
         return self._attach_clip_card_to_grid_item(item)
 
     def _clips_refresh_viewport(self) -> None:
-        """Materialize visible (+overscan) ClipCards — never drop already-built ones.
+        """Materialize visible ClipCards and keep them for later visits.
 
         Quick keeps every ClipCard for the session. Progressive used to evict
         off-screen widgets under a live-cap; fast scroll then looked like a
         reprinting press. Once printed, cards stay.
         """
         startup = bool(getattr(self, "_clips_startup_fill_pending", False))
-        # Inserting rows grows the scrollbar and looks like a user scroll.
-        # That used to skip the shelf fill for the whole scan, so a short
-        # first paint stayed at six cards until a later idle pass.
-        if (
-            getattr(self, "_clips_scroll_active", False)
-            and not startup
-            and not getattr(self, "_clips_scan_active", False)
-        ):
-            return
+        scrolling = bool(getattr(self, "_clips_scroll_active", False))
         if not getattr(self, "_clips_progressive_active", False):
             return
         grid = getattr(self, "grid_clips", None)
@@ -6432,12 +6445,15 @@ class LibraryMixin:
         if getattr(self, "_library_panel_mode", "clips") != "clips":
             if not grid.isVisible():
                 return
+        if time.monotonic() < getattr(self, "_clips_selection_priority_until", 0.0):
+            self._schedule_clips_viewport_refresh(_CLIP_VIEWPORT_SCROLL_MS, keep=True)
+            return
         window = getattr(self, "ui", None)
         window_up = window is not None and window.isVisible()
         vp = grid.viewport()
         if window_up:
             try:
-                grid.doItemsLayout()
+                grid.executeDelayedItemsLayout()
             except Exception:
                 pass
         height = int(vp.height()) if vp is not None else 0
@@ -6461,18 +6477,21 @@ class LibraryMixin:
                 if retries <= 40:
                     QTimer.singleShot(50, self._clips_refresh_viewport)
             return
-        pending = [
-            item
-            for item in self._clips_shelf_items(slots)
-            if item is not None and grid.itemWidget(item) is None
-        ]
-        # Whole on-screen shelf, capped so a dense small-card grid cannot hitch.
-        budget = _CLIP_VIEWPORT_FILL_CAP
-        for item in pending[:budget]:
+        scan_active = getattr(self, "_clips_scan_active", False)
+        if scan_active or not grid.isVisible():
+            items = self._clips_shelf_items(slots)
+        else:
+            items = self._clips_visible_items()
+        pending = [item for item in items if grid.itemWidget(item) is None]
+        deadline = time.perf_counter() + _CLIP_VIEWPORT_BUDGET_S
+        built = False
+        for item in pending:
+            if built and time.perf_counter() >= deadline:
+                delay = _CLIP_VIEWPORT_SCROLL_MS if scrolling else _CLIP_VIEWPORT_GAP_MS
+                self._schedule_clips_viewport_refresh(delay, keep=True)
+                return
             self._materialize_clip_grid_item(item)
-        if len(pending) > budget:
-            QTimer.singleShot(_CLIP_VIEWPORT_GAP_MS, self._clips_refresh_viewport)
-            return
+            built = True
 
         if startup:
             self._clips_startup_fill_pending = False
@@ -6487,6 +6506,16 @@ class LibraryMixin:
                 int(vp.width()) if vp is not None else 0,
                 height,
             )
+        if not scrolling and not scan_active and getattr(self, "_clips_traversed_ranges", None):
+            # Convert the accumulated content ranges to the settled viewport.
+            # Qt can coalesce drag/wheel updates without painting each position.
+            offset = grid.verticalOffset()
+            areas = [
+                QRect(0, lo - offset, vp.width(), hi - lo)
+                for lo, hi in self._clips_traversed_ranges
+            ]
+            self._clips_traversed_ranges.clear()
+            self._queue_clips_seen(self._clips_visible_items(areas))
         # visualRect was often 0×0 until this layout pass — shelf flush needs a redo.
         self._schedule_clip_card_edge_sync()
         self._schedule_clips_idle_fill(delay_ms=_CLIP_IDLE_FILL_START_MS)
