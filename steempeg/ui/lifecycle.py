@@ -1132,16 +1132,11 @@ class LifecycleMixin:
         btn_report.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_report.clicked.connect(self.show_report_dialog)
 
-        from steempeg.ui.icon_assets import load_pixmap
-        from steempeg.ui.kofi_dialog import KOFI_MARK
+        from steempeg.ui.kofi_dialog import KofiSupportButton
 
-        btn_kofi = QPushButton("Support")
+        btn_kofi = KofiSupportButton("Support", 16)
         btn_kofi.setObjectName("AboutKofiBtn")
         btn_kofi.setCursor(Qt.CursorShape.PointingHandCursor)
-        cup = load_pixmap(KOFI_MARK, 18)
-        if not cup.isNull():
-            btn_kofi.setIcon(QIcon(cup))
-            btn_kofi.setIconSize(cup.size())
         btn_kofi.clicked.connect(self.show_kofi_dialog)
 
         btn_close = QPushButton("Close")

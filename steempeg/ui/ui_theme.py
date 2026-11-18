@@ -2495,15 +2495,15 @@ def about_dialog_stylesheet(*, pro: bool | None = None) -> str:
     QPushButton#AboutReportBtn:pressed {{
         background-color: {c["danger_pressed_bg"]};
     }}
-    /* Ko-fi cream CTA — shared UI typography with Report/Close. */
+    /* Ko-fi cream CTA with its bundled brand typeface. */
     QPushButton#AboutKofiBtn {{
         background-color: #FFF9F3;
         color: #3A342E;
         border: 1px solid #E0D5C8;
         border-radius: 16px;
         padding: 6px 16px;
-        font-family: {tok.FONT_APP};
-        font-size: 12px;
+        font-family: "Fredoka", {tok.FONT_APP};
+        font-size: 14px;
         font-weight: 700;
         min-height: 32px;
         outline: none;
