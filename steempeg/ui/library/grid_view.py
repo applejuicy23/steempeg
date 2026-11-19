@@ -11,6 +11,7 @@ import PySide6.QtWidgets as qtw
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
 from steempeg.ui import ui_theme as _ut
+from steempeg.ui.library.card_sizes import card_size_spec
 from steempeg.ui.widgets.overflow_marquee import OverflowMarqueeLabel
 
 
@@ -52,6 +53,55 @@ _QUEUE_BADGE_CYCLE_MS = 1000
 # Small ClipCard: hover thumb this long → fade game icon / CLIP / queue / health.
 _THUMB_PEEK_DELAY_MS = 2000
 _THUMB_PEEK_FADE_MS = 220
+_THUMB_REVEAL_MS = 160
+
+
+class _ThumbnailLabel(qtw.QLabel):
+    """Fade the image independently of the badges painted above it."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._reveal: Optional[qtc.QVariantAnimation] = None
+
+    def reveal(self, plate: qtg.QPixmap, delay_ms: int = 0) -> None:
+        if self._reveal is not None:
+            return
+        self._plate = plate
+        animation = qtc.QVariantAnimation(self)
+        animation.setDuration(_THUMB_REVEAL_MS)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(qtc.QEasingCurve.Type.OutCubic)
+        animation.valueChanged.connect(lambda _value: self.update())
+        animation.finished.connect(self._finish_reveal)
+        self._reveal = animation
+        if delay_ms:
+            qtc.QTimer.singleShot(
+                delay_ms, animation,
+                lambda: animation.start() if self._reveal is animation else None,
+            )
+        else:
+            animation.start()
+
+    def _finish_reveal(self) -> None:
+        animation = self._reveal
+        if animation is None:
+            return
+        animation.stop()
+        animation.deleteLater()
+        self._reveal = None
+        self._plate = None
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        animation = self._reveal
+        if animation is None:
+            super().paintEvent(event)
+            return
+        painter = qtg.QPainter(self)
+        painter.drawPixmap(0, 0, self._plate)
+        painter.setOpacity(animation.currentValue() or 0.0)
+        painter.drawPixmap(0, 0, self.pixmap())
 
 
 def _asymmetric_round_rect(
@@ -175,7 +225,6 @@ class ClipCard(qtw.QWidget):
         super().__init__(parent)
         from steempeg.ui.library.card_sizes import (
             CARD_SIZE_BIG,
-            card_size_spec,
             normalize_card_size,
         )
 
@@ -209,7 +258,7 @@ class ClipCard(qtw.QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.thumb_label = qtw.QLabel(self)
+        self.thumb_label = _ThumbnailLabel(self)
         self.thumb_label.setFixedSize(tw, th)
         self.thumb_label.setAttribute(qtc.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         # Transparent so baked corner alpha shows the panel behind, not a square fill.
@@ -217,6 +266,7 @@ class ClipCard(qtw.QWidget):
         # top | mid | bottom | both — Round style only: shelf flush vs panel edges
         self._edge_role = "mid"
         self._thumb_raw: Optional[qtg.QPixmap] = None
+        self._thumbnail_revealed = False
 
         if thumb_path and os.path.exists(thumb_path):
             pixmap = qtg.QPixmap(thumb_path)
@@ -541,16 +591,7 @@ class ClipCard(qtw.QWidget):
         self._clipped_thumb_key = key
         if raw is None or raw.isNull():
             # Empty well still needs a dark plate matching the style.
-            plate = qtg.QPixmap(tw, th)
-            plate.fill(qtc.Qt.GlobalColor.transparent)
-            path = _asymmetric_round_rect(
-                float(tw), float(th), float(ttl), float(ttr), float(tbr), float(tbl)
-            )
-            painter = qtg.QPainter(plate)
-            painter.setRenderHint(qtg.QPainter.RenderHint.Antialiasing, True)
-            painter.fillPath(path, qtg.QColor(_clip_plate_color()))
-            painter.end()
-            self.thumb_label.setPixmap(plate)
+            self.thumb_label.setPixmap(self._thumbnail_plate())
             return
         self.thumb_label.setPixmap(
             _clip_pixmap_to_corners(
@@ -563,6 +604,26 @@ class ClipCard(qtw.QWidget):
                 h=th,
             )
         )
+
+    def _thumbnail_plate(self) -> qtg.QPixmap:
+        tw, th = self._tw, self._th
+        ttl, ttr, tbr, tbl = self._radius_plan()["thumb"]
+        plate = qtg.QPixmap(tw, th)
+        plate.fill(qtc.Qt.GlobalColor.transparent)
+        path = _asymmetric_round_rect(tw, th, ttl, ttr, tbr, tbl)
+        painter = qtg.QPainter(plate)
+        painter.setRenderHint(qtg.QPainter.RenderHint.Antialiasing)
+        painter.fillPath(path, qtg.QColor(_clip_plate_color()))
+        painter.end()
+        return plate
+
+    def reveal_thumbnail(self, delay_ms: int = 0) -> None:
+        if self.has_thumbnail() and not self._thumbnail_revealed:
+            self._thumbnail_revealed = True
+            self.thumb_label.reveal(self._thumbnail_plate(), delay_ms)
+
+    def finish_thumbnail_reveal(self) -> None:
+        self.thumb_label._finish_reveal()
 
     def set_queue_badge(
         self,
@@ -832,7 +893,9 @@ class ClipCard(qtw.QWidget):
     def has_thumbnail(self) -> bool:
         return self._thumb_raw is not None
 
-    def set_thumbnail(self, thumb_path: str) -> None:
+    def set_thumbnail(
+        self, thumb_path: str, *, animate: bool = False, delay_ms: int = 0,
+    ) -> None:
         if thumb_path and os.path.exists(thumb_path):
             pixmap = qtg.QPixmap(thumb_path)
             if not pixmap.isNull():
@@ -843,8 +906,11 @@ class ClipCard(qtw.QWidget):
                     qtc.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                     qtc.Qt.TransformationMode.SmoothTransformation,
                 )
+                reveal = animate and not self.has_thumbnail()
                 self._thumb_raw = scaled_thumb
                 self._refresh_clipped_thumb()
+                if reveal:
+                    self.reveal_thumbnail(delay_ms)
                 self._dim_no_preview = False
                 self._sync_unavailable_dim()
 
