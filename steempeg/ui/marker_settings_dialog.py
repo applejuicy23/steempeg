@@ -317,7 +317,7 @@ class MarkerSettingsDialog(SteempegDialog):
             elif (
                 "delete" in label
                 or label == "reset all"
-                or label == "remove"
+                or label.startswith("remove")
                 or label.startswith("reset this")
             ):
                 btn.setStyleSheet(danger)
@@ -553,7 +553,7 @@ class MarkerSettingsDialog(SteempegDialog):
         icon_row = QHBoxLayout()
         self._mk_icon_btn = QPushButton("Custom icon…")
         self._mk_icon_btn.clicked.connect(self._pick_marker_icon)
-        self._mk_icon_clear = QPushButton("Remove")
+        self._mk_icon_clear = QPushButton("Remove icon")
         self._mk_icon_clear.clicked.connect(self._clear_marker_icon)
         icon_row.addWidget(self._mk_icon_btn)
         icon_row.addWidget(self._mk_icon_clear)
@@ -600,7 +600,12 @@ class MarkerSettingsDialog(SteempegDialog):
 
         self._mk_reset_btn = QPushButton("Reset this marker")
         self._mk_reset_btn.clicked.connect(self._reset_one_marker)
-        ed.addWidget(self._mk_reset_btn)
+        self._mk_remove_btn = QPushButton("Remove marker")
+        self._mk_remove_btn.clicked.connect(self._remove_selected_marker)
+        marker_actions = QHBoxLayout()
+        marker_actions.addWidget(self._mk_reset_btn)
+        marker_actions.addWidget(self._mk_remove_btn)
+        ed.addLayout(marker_actions)
         ed.addStretch(1)
 
         right.addWidget(self._mk_editor, 1)
@@ -866,6 +871,16 @@ class MarkerSettingsDialog(SteempegDialog):
 
     def keyPressEvent(self, event):
         if (
+            event.key() == Qt.Key.Key_Delete
+            and hasattr(self, "_marker_table")
+            and self._marker_table.hasFocus()
+        ):
+            row = self._selected_marker_row_info()
+            if row is not None and row.get("kind") == "user":
+                self._delete_on_clip_marker(row)
+            event.accept()
+            return
+        if (
             event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
             and hasattr(self, "_class_list")
             and self._class_list.hasFocus()
@@ -1032,6 +1047,11 @@ class MarkerSettingsDialog(SteempegDialog):
             return menu.addAction(f"📋 {label}")
         return menu.addAction(f"🗑️ {label}")
 
+    def _remove_selected_marker(self) -> None:
+        row_info = self._selected_marker_row_info()
+        if row_info is not None:
+            self._delete_on_clip_marker(row_info)
+
     def _delete_on_clip_marker(self, row_info: dict) -> None:
         canvas = self._canvas()
         marker = self._canvas_marker_for_row(row_info)
@@ -1039,8 +1059,19 @@ class MarkerSettingsDialog(SteempegDialog):
             return
         if not mprefs.is_user_marker(marker):
             return
-        if hasattr(canvas, "delete_user_marker"):
-            canvas.delete_user_marker(marker)
+        table = self._marker_table
+        next_id = None
+        row_id = row_info.get("row_id") or row_info["key"]
+        for row in range(table.rowCount()):
+            item = table.item(row, _COL_TIME)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole) == row_id:
+                following = table.item(row + 1, _COL_TIME)
+                if following is not None:
+                    next_id = following.data(Qt.ItemDataRole.UserRole)
+                break
+
+        canvas.delete_user_marker(marker)
+        self._selected_row_id = next_id
         self._sync_clip_markers_from_canvas()
         self._emit_changed()
 
@@ -1284,6 +1315,7 @@ class MarkerSettingsDialog(SteempegDialog):
             self._mk_icon_btn,
             self._mk_icon_clear,
             self._mk_reset_btn,
+            self._mk_remove_btn,
             self._mk_path_open,
             self._mk_path_folder,
         ):
@@ -1326,6 +1358,7 @@ class MarkerSettingsDialog(SteempegDialog):
             return
 
         self._set_marker_editor_enabled(True)
+        self._mk_remove_btn.setEnabled(row_info.get("kind") == "user")
         key = self._selected_key
         label = row_info.get("label") or mprefs.friendly_marker_label(key)
         ov = mprefs.marker_override(key, self._prefs)
@@ -1541,7 +1574,6 @@ class MarkerSettingsDialog(SteempegDialog):
 
     def _save_marker_fields(self) -> None:
         key = self._selected_key
-        row_id = self._selected_row_id
         if not key:
             return
         label = self._mk_label.text().strip()
@@ -1571,22 +1603,12 @@ class MarkerSettingsDialog(SteempegDialog):
                 if hasattr(canvas, "text_tooltip"):
                     canvas.text_tooltip.hide()
                 canvas.update()
-                try:
-                    from steempeg.core.clip_markers_cache import (
-                        update_user_marker_fields,
-                    )
-
-                    update_user_marker_fields(
-                        getattr(canvas, "_markers_cache_dir", None),
-                        marker,
-                        clip_path=getattr(canvas, "current_clip_path", None),
-                        json_path=getattr(canvas, "current_json_path", None),
-                    )
-                except Exception:
-                    pass
+                canvas.persist_user_marker_fields(marker)
         self._emit_changed()
-        self._repopulate_markers()
-        self._select_marker_row_id(row_id, seek=False)
+        if marker is not None and mprefs.is_user_marker(marker):
+            self._sync_clip_markers_from_canvas()
+        else:
+            self._repopulate_markers()
 
     def _pick_marker_icon(self) -> None:
         key = self._selected_key

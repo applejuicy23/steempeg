@@ -2160,7 +2160,6 @@ class TimelineCanvas(QWidget):
     def edit_user_marker(self, marker):
         """Opens the editing window; Steempeg markers persist in app cache only."""
         from steempeg.services import marker_prefs as mprefs
-        from steempeg.core.clip_markers_cache import update_user_marker_fields
 
         marker_key = mprefs.user_instance_prefs_key(
             marker.get("id"),
@@ -2180,46 +2179,52 @@ class TimelineCanvas(QWidget):
             if hasattr(self, 'text_tooltip'):
                 self.text_tooltip.hide()
             self.update()
+            self.persist_user_marker_fields(marker)
+            self._sync_open_marker_settings()
 
-            rendered_path = getattr(self, "rendered_media_path", None)
-            if rendered_path and os.path.isfile(rendered_path):
-                cache_dir = getattr(self, "_markers_cache_dir", None)
-                if cache_dir:
-                    from steempeg.core.rendered_media import (
-                        canvas_markers_to_sidecar,
-                        save_markers_sidecar,
-                    )
-                    save_markers_sidecar(
-                        cache_dir,
-                        rendered_path,
-                        canvas_markers_to_sidecar(
-                            [
-                                m
-                                for m in getattr(self, "markers", [])
-                                if m.get("icon_key") == "usermarker"
-                            ]
-                        ),
-                    )
-                return
+    def persist_user_marker_fields(self, marker) -> None:
+        """Save edited marker fields using the active media storage."""
+        from steempeg.core.clip_markers_cache import update_user_marker_fields
 
-            update_user_marker_fields(
-                getattr(self, "_markers_cache_dir", None),
-                marker,
-                clip_path=getattr(self, "current_clip_path", None),
-                json_path=getattr(self, "current_json_path", None),
-            )
-            from steempeg.core.clip_markers_cache import (
-                is_steempeg_timeline_json,
-                sync_user_markers_to_steempeg_timeline,
-            )
-
-            json_path = getattr(self, "current_json_path", None)
-            if is_steempeg_timeline_json(json_path):
-                sync_user_markers_to_steempeg_timeline(
-                    json_path,
-                    getattr(self, "markers", []),
-                    offset_ms=int(getattr(self, "current_offset_ms", 0) or 0),
+        rendered_path = getattr(self, "rendered_media_path", None)
+        if rendered_path and os.path.isfile(rendered_path):
+            cache_dir = getattr(self, "_markers_cache_dir", None)
+            if cache_dir:
+                from steempeg.core.rendered_media import (
+                    canvas_markers_to_sidecar,
+                    save_markers_sidecar,
                 )
+                save_markers_sidecar(
+                    cache_dir,
+                    rendered_path,
+                    canvas_markers_to_sidecar(
+                        [
+                            m
+                            for m in getattr(self, "markers", [])
+                            if m.get("icon_key") == "usermarker"
+                        ]
+                    ),
+                )
+            return
+
+        update_user_marker_fields(
+            getattr(self, "_markers_cache_dir", None),
+            marker,
+            clip_path=getattr(self, "current_clip_path", None),
+            json_path=getattr(self, "current_json_path", None),
+        )
+        from steempeg.core.clip_markers_cache import (
+            is_steempeg_timeline_json,
+            sync_user_markers_to_steempeg_timeline,
+        )
+
+        json_path = getattr(self, "current_json_path", None)
+        if is_steempeg_timeline_json(json_path):
+            sync_user_markers_to_steempeg_timeline(
+                json_path,
+                getattr(self, "markers", []),
+                offset_ms=int(getattr(self, "current_offset_ms", 0) or 0),
+            )
 
     def delete_user_marker(self, marker):
         """Remove a user marker from the timeline and Steempeg cache (not Steam JSON)."""
@@ -2563,9 +2568,8 @@ class TimelineCanvas(QWidget):
             from steempeg.ui.marker_settings_dialog import MarkerSettingsDialog
 
             for w in qtw.QApplication.topLevelWidgets():
-                if isinstance(w, MarkerSettingsDialog) and w.isVisible():
-                    if hasattr(w, "_sync_clip_markers_from_canvas"):
-                        w._sync_clip_markers_from_canvas()
+                if isinstance(w, MarkerSettingsDialog) and w.isVisible() and w._canvas() is self:
+                    w._sync_clip_markers_from_canvas()
         except Exception:
             pass
 
