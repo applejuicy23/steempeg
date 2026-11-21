@@ -341,6 +341,7 @@ class RenderMixin:
             (192, "192 kbps (Good Quality)"),
             (160, "160 kbps"),
             (128, "128 kbps (Standard)"),
+            (96, "96 kbps"),
             (64, "64 kbps (Bad)"),
             (32, "32 kbps (Very bad)"),
         ]
@@ -626,14 +627,10 @@ class RenderMixin:
                 widget = getattr(ui, name, None)
                 if widget is not None:
                     widget.setEnabled(True)
-            if audio_only and hasattr(ui, "tab_video"):
-                ui.tab_video.setEnabled(False)
-            elif mute and hasattr(ui, "tab_audio"):
-                ui.tab_audio.setEnabled(False)
-            elif hasattr(ui, "tab_video"):
-                ui.tab_video.setEnabled(True)
-            if hasattr(ui, "tab_audio") and not mute:
-                ui.tab_audio.setEnabled(True)
+            if hasattr(ui, "tab_video"):
+                ui.tab_video.setEnabled(not audio_only)
+            if hasattr(ui, "tab_audio"):
+                ui.tab_audio.setEnabled(not mute)
 
         if self._fix_invalid_output_combo():
             self._mark_output_preset_custom()
@@ -3642,18 +3639,12 @@ class RenderMixin:
             fps_val = getattr(self, "current_orig_fps", 60)
             self.ui.combo_fps.addItem(f"{fps_val} FPS (Original)")
 
-            optional_fps = []
-            if fps_val >= 60:
-                optional_fps = [30, 15]
-            elif fps_val >= 30:
-                optional_fps = [15]
-            for target in optional_fps:
-                self.ui.combo_fps.addItem(f"{target} FPS")
-            # Show common higher FPS greyed when source is lower (cannot invent frames).
+            # The source rate already has its own Original row.
             for target in (60, 30, 15):
-                label = f"{target} FPS"
-                if self.ui.combo_fps.findText(label) < 0 and target > fps_val:
-                    self.ui.combo_fps.addItem(label)
+                if target == fps_val:
+                    continue
+                self.ui.combo_fps.addItem(f"{target} FPS")
+                if target > fps_val:
                     idx = self.ui.combo_fps.count() - 1
                     set_combo_item_enabled(
                         self.ui.combo_fps,
@@ -6083,7 +6074,7 @@ class RenderMixin:
         # One summary rebuild at the end — not once per combo signal.
         self._applying_export_preset = True
         try:
-            apply_job_settings_to_ui(self, settings, refresh_summary=True)
+            apply_job_settings_to_ui(self, settings, from_preset=True)
             # Explicit apply only — never auto-check from matching UI by accident.
             self._set_active_custom_preset(preset_name)
             from steempeg.ui.widgets.preset_apply_button import preset_apply_state

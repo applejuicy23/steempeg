@@ -132,7 +132,7 @@ def resolve_fps_for_source(fps_text: str, source_fps: int) -> str:
         want = int(m.group(1))
     except ValueError:
         return text
-    if src > 0 and want > src:
+    if src > 0 and want >= src:
         return f"{src} FPS (Original)"
     if "FPS" in text.upper():
         return text

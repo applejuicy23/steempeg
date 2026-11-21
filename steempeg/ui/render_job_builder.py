@@ -20,6 +20,7 @@ from steempeg.ui.render_pro_controls import (
     refresh_pro_controls,
     snapshot_pro_fields,
 )
+from steempeg.ui.widgets.combo_chrome import set_combo_index_if_enabled
 from steempeg.render.output_formats import resolve_video_encoder
 from steempeg.render.queue import (
     RenderJob,
@@ -37,17 +38,48 @@ def _set_combo_text(combo, text: str) -> None:
         combo.setCurrentIndex(idx)
 
 
+def _set_video_bitrate_choice(combo, text: str) -> None:
+    # A tier's Mbps label changes with source resolution and selected FPS.
+    tier, separator, _ = text.partition(" - ")
+    if not separator:
+        _set_combo_text(combo, text)
+        return
+    for index in range(combo.count()):
+        if combo.itemText(index).startswith(f"{tier} - "):
+            if set_combo_index_if_enabled(combo, index):
+                return
+
+
+def _set_audio_bitrate_choice(combo, text: str) -> None:
+    if "(Original)" in text:
+        for index in range(combo.count()):
+            if "(Original)" in combo.itemText(index):
+                combo.setCurrentIndex(index)
+                return
+    rate = re.match(r"^(\d+\s+kbps)\b", text)
+    if rate is not None:
+        for index in range(combo.count()):
+            label = combo.itemText(index)
+            if "(Original)" not in label and label.startswith(rate[1]):
+                if set_combo_index_if_enabled(combo, index):
+                    return
+        return
+    _set_combo_text(combo, text)
+
+
 def apply_job_settings_to_ui(
     app: SteempegApp,
     settings: RenderJobSettings,
     *,
     refresh_summary: bool = True,
+    from_preset: bool = False,
 ) -> None:
     """Restore a job's saved settings into the live settings panel.
 
     When ``refresh_summary`` is True (default), runs one ``update_final_setup`` at
     the end. Bulk apply blocks combo signals so Apply-preset does not fire the
-    summary rebuild once per field.
+    summary rebuild once per field. A named preset keeps the open clip's
+    source metadata and honors an explicit software encoder choice.
     """
     ui = app.ui
     state = getattr(app, "_preset_row_apply_state", None)
@@ -57,9 +89,10 @@ def apply_job_settings_to_ui(
     app.custom_target_height = settings.custom_target_height
     app.custom_target_mb = int(getattr(settings, "custom_target_mb", 0) or 0)
     app.custom_target_lossless = bool(getattr(settings, "custom_target_lossless", False))
-    app.current_orig_fps = settings.orig_fps
-    app.current_orig_bitrate = settings.orig_video_mbps
-    app.current_orig_audio_bitrate = settings.orig_audio_kbps
+    if not from_preset:
+        app.current_orig_fps = settings.orig_fps
+        app.current_orig_bitrate = settings.orig_video_mbps
+        app.current_orig_audio_bitrate = settings.orig_audio_kbps
 
     if settings.save_dir:
         app.custom_destination = settings.save_dir
@@ -88,34 +121,39 @@ def apply_job_settings_to_ui(
         ):
             w = getattr(ui, name, None)
             if w is not None and hasattr(w, "blockSignals"):
-                w.blockSignals(True)
-                blockers.append(w)
+                blockers.append((w, w.blockSignals(True)))
 
         if hasattr(ui, "combo_quality") and settings.quality_text:
             _set_combo_text(ui.combo_quality, settings.quality_text)
             if hasattr(app, "on_quality_mode_changed"):
                 app.on_quality_mode_changed(settings.quality_text)
-            if hasattr(app, "update_bitrate_options"):
-                app.update_bitrate_options()
 
         if hasattr(ui, "combo_fps") and settings.fps_text:
             _set_combo_text(ui.combo_fps, settings.fps_text)
+        if hasattr(app, "input_custom_fps"):
+            if "Custom" in (settings.fps_text or "") and settings.custom_fps is not None:
+                app.input_custom_fps.setText(str(settings.custom_fps))
+            else:
+                app.input_custom_fps.clear()
+        if getattr(ui, "combo_quality", None) is not None and settings.quality_text:
+            if hasattr(app, "update_bitrate_options"):
+                app.update_bitrate_options()
+
         if hasattr(ui, "combo_bitrate") and settings.bitrate_text:
-            _set_combo_text(ui.combo_bitrate, settings.bitrate_text)
+            _set_video_bitrate_choice(ui.combo_bitrate, settings.bitrate_text)
         if hasattr(ui, "combo_codec") and settings.codec_text:
             _set_combo_text(ui.combo_codec, settings.codec_text)
 
         if hasattr(ui, "combo_encoder") and settings.encoder_codec:
             saved = str(settings.encoder_codec)
-            # Don't re-apply a stale CPU choice when NVENC/AMF/QSV is available —
-            # old sessions defaulted to libx264 and kept restoring it on every launch.
+            # Legacy sessions defaulted to libx264 even on a GPU-equipped machine.
             hw_available = any(
                 not capabilities.is_software_encoder(
                     str(ui.combo_encoder.itemData(i, Qt.UserRole) or "")
                 )
                 for i in range(ui.combo_encoder.count())
             )
-            if capabilities.is_software_encoder(saved) and hw_available:
+            if not from_preset and capabilities.is_software_encoder(saved) and hw_available:
                 pass  # keep the HW default from detect_gpu_and_set_encoder
             else:
                 matched = False
@@ -145,7 +183,7 @@ def apply_job_settings_to_ui(
         if hasattr(ui, "combo_audio_format") and settings.audio_format:
             _set_combo_text(ui.combo_audio_format, settings.audio_format)
         if hasattr(ui, "combo_audio_bitrate") and settings.audio_bitrate_text:
-            _set_combo_text(ui.combo_audio_bitrate, settings.audio_bitrate_text)
+            _set_audio_bitrate_choice(ui.combo_audio_bitrate, settings.audio_bitrate_text)
         if hasattr(ui, "combo_container") and settings.container_format:
             _set_combo_text(ui.combo_container, settings.container_format)
         if hasattr(ui, "combo_output_preset") and settings.output_preset:
@@ -166,13 +204,6 @@ def apply_job_settings_to_ui(
                 app.calculate_strict_target(1, is_lossless=True)
             elif int(settings.custom_target_mb or 0) > 0:
                 app.calculate_strict_target(int(settings.custom_target_mb), is_custom=True)
-
-        fps_custom = "Custom" in (settings.fps_text or "")
-        if hasattr(app, "input_custom_fps"):
-            if fps_custom and settings.custom_fps is not None:
-                app.input_custom_fps.setText(str(settings.custom_fps))
-            else:
-                app.input_custom_fps.clear()
 
         br_custom = "Custom" in (settings.bitrate_text or "")
         if hasattr(app, "input_custom_vbitrate"):
@@ -195,11 +226,13 @@ def apply_job_settings_to_ui(
         if hasattr(app, "_sync_original_audio_controls"):
             app._sync_original_audio_controls()
     finally:
-        for w in blockers:
-            w.blockSignals(False)
+        for w, was_blocked in blockers:
+            w.blockSignals(was_blocked)
         app._bulk_settings_apply = prev_bulk
 
     refresh_pro_controls(app)
+    if hasattr(app, "refresh_output_format_availability"):
+        app.refresh_output_format_availability()
     if refresh_summary and hasattr(app, "update_final_setup"):
         app.update_final_setup()
 
