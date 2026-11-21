@@ -1239,18 +1239,24 @@ class PlayerMixin:
             return
 
         try:
-            if self.player.pause:
-                dur = self._playback_duration_sec()
-                try:
-                    pos = self.player.time_pos
-                except Exception:
-                    pos = None
-                if dur and pos is not None and float(pos) >= float(dur) - 0.05:
+            # At EOF mpv may keep time_pos at the last frame or return None.
+            at_end = bool(getattr(self.player, "eof_reached", False)) and not getattr(
+                self, "_restart_from_eof", False
+            )
+            if self.player.pause or at_end:
+                if not at_end:
+                    dur = self._playback_duration_sec()
+                    try:
+                        pos = self.player.time_pos
+                    except Exception:
+                        pos = None
+                    at_end = bool(dur and pos is not None and float(pos) >= float(dur) - 0.05)
+                if at_end:
+                    if not self._safe_mpv_seek(0):
+                        return
                     self._restart_from_eof = True
                     self._ignore_playback_stall(0.5)
-                    self._safe_mpv_seek(0)
-                    if hasattr(self, 'custom_timeline'):
-                        self.custom_timeline.force_jump(0)
+                    self.custom_timeline.force_jump(0)
                 self.player.pause = False
             else:
                 self._restart_from_eof = False
@@ -5908,20 +5914,12 @@ class PlayerMixin:
                 or (duration_ms > 0 and current_ms >= duration_ms - end_slop)
             )
 
-            if at_end and not ignoring_stale:
+            # The old EOF may still be visible while a replay seek is in flight.
+            if at_end and not ignoring_stale and not getattr(self, "_restart_from_eof", False):
                 # Snap to true end so the scrubber fills the purple bar (lost when
                 # we switched from rewind-to-0 to pause-at-EOF in 39.3).
                 current_ms = float(duration_ms) if duration_ms > 0 else current_ms
-                restarting = bool(getattr(self, "_restart_from_eof", False))
-                if restarting and duration_ms > 0 and current_ms < duration_ms - end_slop:
-                    self._restart_from_eof = False
-                    restarting = False
-                if user_scrubbing:
-                    pass
-                elif restarting:
-                    # User hit Play at EOF — seek is in flight; don't re-latch pause.
-                    self._sync_play_button_icon(paused=False)
-                else:
+                if not user_scrubbing:
                     if not self.player.pause:
                         self.player.pause = True
                     self._sync_play_button_icon(paused=True)
@@ -5935,7 +5933,7 @@ class PlayerMixin:
                         canvas.visual_ms = float(duration_ms)
                         canvas.target_ms = float(duration_ms)
                         canvas.vlc_last_update_time = time.time()
-            elif not ignoring_stale:
+            elif not at_end:
                 self._eof_rewind_pending = 0
                 self._restart_from_eof = False
 
