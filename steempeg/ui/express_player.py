@@ -277,6 +277,7 @@ class ExpressPlayerWindow(QWidget):
         self._info = info
         self._player = None
         self._duration_ms = 0
+        self._last_position_ms: float | None = None
         self._was_playing_before_drag = False
         self._render = None
         self._last_output = ""
@@ -583,6 +584,7 @@ class ExpressPlayerWindow(QWidget):
         self._attach_hover_preview(play_path)
         self._prefetch_marker_sprite()
         self._load_timeline_marks(play_path)
+        self._last_position_ms = None
         self._player.play(play_path)
         self._player.pause = False
         self._poll.start()
@@ -761,6 +763,9 @@ class ExpressPlayerWindow(QWidget):
         if player is None:
             return
         try:
+            # A seek can still be decoding while time_pos reports the old frame.
+            if player.seeking:
+                return
             duration = player.duration
             position = player.time_pos
             paused = bool(player.pause)
@@ -773,10 +778,18 @@ class ExpressPlayerWindow(QWidget):
         position_ms = float(position or 0.0) * 1000.0
         playing = not paused and not at_end
         canvas = self._timeline.canvas
-        if playing and canvas.is_trim_mode and canvas.trim_end_ms > canvas.trim_start_ms:
-            if position_ms >= canvas.trim_end_ms:
-                self._seek_ms(canvas.trim_start_ms)
-                position_ms = canvas.trim_start_ms
+        previous_ms = self._last_position_ms
+        if position is not None:
+            self._last_position_ms = position_ms
+        if (
+            playing
+            and canvas.is_trim_mode
+            and canvas.trim_end_ms > canvas.trim_start_ms
+            and previous_ms is not None
+            and previous_ms < canvas.trim_end_ms <= position_ms
+        ):
+            self._seek_ms(canvas.trim_start_ms)
+            position_ms = canvas.trim_start_ms
         self._timeline.set_vlc_time(position_ms, playing)
         self._time_label.setText(
             f"{format_player_time(position_ms)} / {format_player_time(self._duration_ms)}"
@@ -815,10 +828,15 @@ class ExpressPlayerWindow(QWidget):
         """Seeks mpv to an absolute position in milliseconds."""
         if self._player is None:
             return
+        target_ms = max(0.0, ms)
         try:
-            self._player.seek(max(0.0, ms / 1000.0), reference="absolute", precision="exact")
+            self._player.seek(target_ms / 1000.0, reference="absolute", precision="exact")
         except Exception:
             logging.debug("Express player: seek failed", exc_info=True)
+        else:
+            # Start measuring playback from the seek destination. A jump past
+            # the trim end must not count as playing through that boundary.
+            self._last_position_ms = target_ms
 
     def _on_timeline_press(self) -> None:
         """Pauses while the playhead is dragged."""
