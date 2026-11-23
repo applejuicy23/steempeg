@@ -311,7 +311,7 @@ def sync_preview_zoom_chrome(
     btn_loupe.setChecked(armed)
     btn_loupe.blockSignals(False)
     btn_loupe.setFixedSize(int(chip), int(chip))
-    btn_loupe.setStyleSheet(loupe_qss)
+    ut.set_stylesheet_if_changed(btn_loupe, loupe_qss)
     btn_loupe.setToolTip(
         "Loupe on — wheel zooms toward cursor; LMB/RMB drag pans (click to disarm)"
         if armed
@@ -336,7 +336,7 @@ def sync_preview_zoom_chrome(
     btn_pct.setMaximumHeight(int(chip))
     btn_pct.setMinimumWidth(0)
     btn_pct.setMaximumWidth(16777215)
-    btn_pct.setStyleSheet(pct_qss)
+    ut.set_stylesheet_if_changed(btn_pct, pct_qss)
     btn_pct.setText(f" {pct}% ▾ ")
 
     # Keep ClipCard press radius matched to QSS (8px) after density/restyle.
@@ -499,10 +499,7 @@ def show_preview_zoom_menu(app) -> None:
     from steempeg.ui.player import preview_quality as pq
 
     menu = QMenu(getattr(app, "ui", app))
-    try:
-        menu.setStyleSheet(pq.menu_stylesheet())
-    except Exception:
-        menu.setStyleSheet(ut.menu_stylesheet())
+    ut.set_stylesheet_if_changed(menu, pq.menu_stylesheet())
 
     title = menu.addAction("Preview zoom")
     title.setEnabled(False)

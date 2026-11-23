@@ -17,6 +17,8 @@ import time
 from PySide6.QtCore import Qt, QTimer, QRectF
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
+from steempeg.ui.pro_appearance import accent_qcolor
+
 
 _SW_SHOWNOACTIVATE = 4
 _GWL_EXSTYLE = -20
@@ -232,7 +234,7 @@ class BufferingOverlay(QWidget):
         painter.drawRoundedRect(rect, 14, 14)
 
         cx, cy, r = 30.0, self.height() / 2.0, 11.0
-        pen = QPen(QColor("#b29ae7"))
+        pen = QPen(accent_qcolor(QColor("#b29ae7")))
         pen.setWidth(4)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)

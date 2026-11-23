@@ -53,6 +53,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from steempeg.ui.pro_appearance import accent_qcolor
+
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.edit_marker_dialog import EditSteamMarkerDialog
@@ -1605,7 +1607,7 @@ class TimelineCanvas(QWidget):
         if self.duration_ms <= 0: return
         
         fill_x_end = self.ms_to_x(self.visual_ms)
-        painter.fillRect(QRectF(pad, track_y, fill_x_end - pad, track_height), self.fill_color)
+        painter.fillRect(QRectF(pad, track_y, fill_x_end - pad, track_height), accent_qcolor(self.fill_color))
         
         if self.is_trim_mode:
             start_x = self.ms_to_x(self.trim_start_ms)
@@ -2012,7 +2014,7 @@ class TimelineCanvas(QWidget):
         from steempeg.ui import ui_theme as ut
 
         menu = QMenu(self)
-        menu.setStyleSheet(ut.library_menu_stylesheet())
+        ut.set_stylesheet_if_changed(menu, ut.context_menu_stylesheet())
         self._prepare_immersive_safe_menu(menu)
         
         # Declare variables in advance so the code doesn't crash if the buttons are missing
@@ -2079,7 +2081,7 @@ class TimelineCanvas(QWidget):
         from steempeg.ui import ui_theme as ut
 
         menu = QMenu(self)
-        menu.setStyleSheet(ut.library_menu_stylesheet())
+        ut.set_stylesheet_if_changed(menu, ut.context_menu_stylesheet())
         self._prepare_immersive_safe_menu(menu)
 
         action_add_marker = menu.addAction("📍 Add Marker Here")
@@ -2741,7 +2743,7 @@ class TimelineOverviewScrollBar(QScrollBar):
         thumb = self._thumb_rect(groove)
         active = self.underMouse() or self.isSliderDown()
         if thumb.width() > 0 and thumb.height() > 0:
-            painter.setBrush(self._THUMB_HOVER if active else self._THUMB)
+            painter.setBrush(accent_qcolor(self._THUMB_HOVER if active else self._THUMB))
             painter.drawRoundedRect(QRectF(thumb), radius, radius)
 
             # Giga-zoom nest: outer stays at min grab width; inner shows true scale.
@@ -2763,7 +2765,7 @@ class TimelineOverviewScrollBar(QScrollBar):
                 inner_y = float(thumb.top()) + inset
                 inner_r = max(1.0, inner_h * 0.5)
                 painter.setBrush(
-                    self._THUMB_INNER_HOVER if active else self._THUMB_INNER
+                    accent_qcolor(self._THUMB_INNER_HOVER if active else self._THUMB_INNER)
                 )
                 painter.drawRoundedRect(
                     QRectF(inner_x, inner_y, inner_w, inner_h),
@@ -3157,7 +3159,7 @@ class PreviewSpinnerOverlay(QWidget):
         cx = self.width() / 2.0
         cy = self.height() / 2.0
         radius = 14.0
-        pen = QPen(QColor("#b29ae7"))
+        pen = QPen(accent_qcolor(QColor("#b29ae7")))
         pen.setWidth(4)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)

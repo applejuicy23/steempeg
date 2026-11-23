@@ -38,6 +38,7 @@ from steempeg.core.rendered_media import (
     probe_media_duration_sec,
 )
 from steempeg.infra.paths import get_resource_path, get_save_directory
+from steempeg.ui.pro_appearance import themed_asset_path
 from steempeg.ui.player.immersive_chrome import enter_immersive_chrome, exit_immersive_chrome
 from steempeg.ui.window_chrome import (
     collapse_content_insets,
@@ -489,7 +490,7 @@ class PlayerMixin:
             self.ui.label_time.setText("00:00 / 00:00")
 
         if hasattr(self.ui, 'btn_play'):
-            self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_play.png")))
+            self.ui.btn_play.setIcon(QIcon(themed_asset_path("icon_play.png")))
 
     def _park_mpv_embed_when_not_showing(self):
         """Hide the native mpv HWND while the stack shows placeholder/blank."""
@@ -1210,9 +1211,9 @@ class PlayerMixin:
             except Exception:
                 paused = True
         icon_path = (
-            get_resource_path("icon_play.png")
+            themed_asset_path("icon_play.png")
             if paused
-            else get_resource_path("icon_pause.png")
+            else themed_asset_path("icon_pause.png")
         )
         self.ui.btn_play.setIcon(QIcon(icon_path))
 
@@ -4152,7 +4153,7 @@ class PlayerMixin:
             # here cancels the reveal timer and leaves the native embed parked
             # behind video_blank_frame. Reveal/finish own the switch gates.
             if hasattr(self.ui, "btn_play"):
-                self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_pause.png")))
+                self.ui.btn_play.setIcon(QIcon(themed_asset_path("icon_pause.png")))
             return
 
         if attempt < 10:
@@ -4479,7 +4480,7 @@ class PlayerMixin:
         QTimer.singleShot(80, lambda: self._poll_rendered_media_duration(file_path, switch_gen))
 
         if hasattr(self.ui, "btn_play"):
-            self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_pause.png")))
+            self.ui.btn_play.setIcon(QIcon(themed_asset_path("icon_pause.png")))
 
         if hasattr(self, "update_clip_health_button"):
             self.update_clip_health_button()
@@ -5813,7 +5814,7 @@ class PlayerMixin:
 
         # --- IMMEDIATELY UPDATE PLAY BUTTON ICON TO PAUSE ---
         if hasattr(self.ui, 'btn_play'):
-            icon_path = get_resource_path("icon_pause.png")
+            icon_path = themed_asset_path("icon_pause.png")
             self.ui.btn_play.setIcon(QIcon(icon_path))
         
 
@@ -7133,10 +7134,11 @@ class PlayerMixin:
         from PySide6.QtGui import QActionGroup
         from PySide6.QtWidgets import QMenu
 
+        from steempeg.ui import ui_theme as ut
         from steempeg.ui.player import preview_quality as pq
 
         menu = QMenu(self.ui)
-        menu.setStyleSheet(pq.menu_stylesheet())
+        ut.set_stylesheet_if_changed(menu, pq.menu_stylesheet())
 
         title = menu.addAction("Preview quality")
         title.setEnabled(False)
