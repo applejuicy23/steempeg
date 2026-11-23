@@ -8,7 +8,7 @@ import webbrowser
 from functools import lru_cache
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import QFont, QFontDatabase, QFontMetricsF, QIcon, QPainterPath, QPalette, QPixmap
+from PySide6.QtGui import QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QIcon, QPainterPath, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -24,6 +24,64 @@ from PySide6.QtWidgets import (
 
 KOFI_URL = "https://ko-fi.com/applejuicy23"  # fallback; prefer resolve_kofi_url()
 KOFI_MARK = "kofi.png"
+
+
+class KofiLinkRow(QWidget):
+    """A selectable URL and a shortcut for copying the entire link."""
+
+    def __init__(self, text_color: str, parent=None):
+        super().__init__(parent)
+        from steempeg.ui import design_tokens as tok
+        from steempeg.ui.icon_assets import load_icon
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        cup = kofi_cup_pixmap(12)
+        mark = QLabel()
+        if not cup.isNull():
+            mark.setPixmap(cup)
+            mark.setFixedSize(cup.size())
+            layout.addWidget(mark)
+        self._label = QLabel()
+        self._label.setTextFormat(Qt.TextFormat.PlainText)
+        self._label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self._label.setStyleSheet(
+            f"color: {text_color}; font-size: 12px; font-family: {tok.FONT_APP}; background: transparent;"
+        )
+        layout.addWidget(self._label)
+        self.copy_button = QPushButton()
+        self.copy_button.setObjectName("KofiCopyLink")
+        self.copy_button.setIcon(load_icon("copyfile.png", 14))
+        self.copy_button.setIconSize(QSize(14, 14))
+        self.copy_button.setFixedSize(22, 22)
+        self.copy_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_button.setToolTip("Copy Ko-fi link")
+        self.copy_button.setAccessibleName("Copy Ko-fi link")
+        self.copy_button.setStyleSheet(
+            "QPushButton#KofiCopyLink { background: transparent; border: 1px solid transparent;"
+            " border-radius: 5px; padding: 0; }"
+            "QPushButton#KofiCopyLink:hover, QPushButton#KofiCopyLink:focus {"
+            " background: rgba(255, 255, 255, 18); border-color: rgba(255, 255, 255, 54); }"
+        )
+        self.copy_button.clicked.connect(self._copy_link)
+        layout.addWidget(self.copy_button)
+        layout.addStretch(1)
+        self.url = KOFI_URL
+
+    def refresh_url(self) -> None:
+        from steempeg.services.kofi_remote import display_kofi_host, resolve_kofi_url
+
+        self.url = resolve_kofi_url(refresh=False)
+        display_url = display_kofi_host(self.url)
+        if self._label.text() != display_url:
+            self._label.setText(display_url)
+
+    def _copy_link(self) -> None:
+        self.refresh_url()
+        QGuiApplication.clipboard().setText(self.url)
 
 
 @lru_cache(maxsize=8)
