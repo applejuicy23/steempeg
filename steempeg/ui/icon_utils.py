@@ -6,9 +6,9 @@ import sys
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QGuiApplication, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import QLabel, QSizePolicy
+from PySide6.QtWidgets import QApplication, QLabel, QSizePolicy
 
-from steempeg.infra.paths import get_resource_path
+from steempeg.ui.pro_appearance import themed_asset_path
 
 
 def app_window_icon() -> QIcon:
@@ -16,7 +16,7 @@ def app_window_icon() -> QIcon:
     # Linux docks (GNOME) often ignore .ico; Windows prefers the multi-size .ico.
     names = ("logo.png", "logo.ico") if sys.platform != "win32" else ("logo.ico", "logo.png")
     for name in names:
-        path = get_resource_path(name)
+        path = themed_asset_path(name)
         if os.path.isfile(path):
             icon = QIcon(path)
             if not icon.isNull():
@@ -25,6 +25,21 @@ def app_window_icon() -> QIcon:
                         icon.addFile(path, QSize(edge, edge))
                 return icon
     return QIcon()
+
+
+def refresh_app_logos(main_window) -> QIcon:
+    """Refresh the Qt icon and the inline logos on already open windows."""
+    app = QApplication.instance()
+    icon = app_window_icon()
+    main_window.setWindowIcon(icon)
+    if app is not None:
+        app.setWindowIcon(icon)
+        for label in app.allWidgets():
+            if isinstance(label, QLabel) and label.objectName() == "SteempegBrandLogo":
+                pixmap = app_logo_pixmap(label.width())
+                if pixmap is not None:
+                    label.setPixmap(pixmap)
+    return icon
 
 
 def primary_device_pixel_ratio() -> float:
@@ -147,7 +162,7 @@ def app_logo_pixmap(size_px: int, *, dpr: float | None = None) -> QPixmap | None
             source = candidate
 
     if source.isNull():
-        png_path = get_resource_path("logo.png")
+        png_path = themed_asset_path("logo.png")
         if not os.path.isfile(png_path):
             return None
         source = QPixmap(png_path)

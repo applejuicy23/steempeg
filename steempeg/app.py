@@ -4,6 +4,7 @@ _STARTUP_ENTRY = _startup_perf_counter()
 from steempeg.version import APP_VERSION_STR
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.ui_theme import set_stylesheet_if_changed as _theme_style
+from steempeg.ui.pro_appearance import apply_pro_appearance, themed_asset_path
 from steempeg.ui.main_window import MainWindow
 from steempeg.infra.logging import global_exception_handler, setup_logging, session_timestamp, mpv_log_path, prune_old_logs
 from steempeg.infra import paths
@@ -288,10 +289,35 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         try:
             from steempeg.ui.settings_prefs import resolve_steempeg_pro
 
-            enabled = resolve_steempeg_pro(self.load_user_settings() or {})
+            settings = self.load_user_settings() or {}
+            enabled = resolve_steempeg_pro(settings)
         except Exception:
+            settings = {}
             enabled = False
         self._steempeg_pro_enabled = enabled
+        accents_changed, logo_changed = apply_pro_appearance(enabled, settings)
+        if logo_changed:
+            from steempeg.ui.icon_utils import refresh_app_logos
+
+            tray_icon = getattr(getattr(self, "_tray", None), "_icon", None)
+            icon = refresh_app_logos(self.ui)
+            if tray_icon is not None:
+                tray_icon.setIcon(icon)
+        if accents_changed:
+            self._refresh_playback_artwork()
+            for button in (getattr(self, "folder_picker", None), getattr(self, "btn_refresh", None)):
+                if button is not None:
+                    button.refresh_accent_icon()
+            queue = getattr(self, "render_queue_panel", None)
+            for chrome in (getattr(self, "card_size_chrome", None), getattr(queue, "_view_chrome", None)):
+                if chrome is not None:
+                    chrome.sync_styles_from_mode()
+            for player in (getattr(self, "_express_players", None) or {}).values():
+                player.refresh_playback_artwork()
+            if hasattr(self, "refresh_render_queue_panel"):
+                self.refresh_render_queue_panel()
+            if hasattr(self, "update_playback_badge"):
+                self.update_playback_badge()
         tb = getattr(getattr(self, "ui", None), "title_bar", None)
         if tb is None:
             tb = getattr(self, "title_bar", None)
@@ -308,6 +334,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         from steempeg.ui.render_pro_controls import refresh_pro_controls
 
         refresh_pro_controls(self)
+
+    def _refresh_playback_artwork(self) -> None:
+        self._sync_play_button_icon()
+        for name, asset in (("btn_skip_back", "less15.png"), ("btn_skip_forward", "more15.png")):
+            button = getattr(self.ui, name, None)
+            if button is not None:
+                button.setIcon(QIcon(themed_asset_path(asset)))
 
     def _wire_pro_encoding_controls(self) -> None:
         from steempeg.ui.render_pro_controls import remember_quality_choice
@@ -723,9 +756,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             pass
         from steempeg.ui.ui_theme import KEY_UI_THEME, DEFAULT_UI_THEME, normalize_ui_theme
 
-        saved_ui = normalize_ui_theme(
-            self.load_user_settings().get(KEY_UI_THEME, DEFAULT_UI_THEME)
-        )
+        from steempeg.ui.settings_prefs import resolve_steempeg_pro
+
+        settings = self.load_user_settings()
+        enabled = resolve_steempeg_pro(settings)
+        if apply_pro_appearance(enabled, settings)[1]:
+            from steempeg.ui.icon_utils import refresh_app_logos
+
+            refresh_app_logos(self.ui)
+        saved_ui = normalize_ui_theme(settings.get(KEY_UI_THEME, DEFAULT_UI_THEME))
         self.apply_ui_theme(saved_ui, persist=False)
         _launch_splash_progress(42, "Applying theme…")
         
@@ -2349,9 +2388,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.ui.btn_skip_forward.setText("")
 
         # 2. Assign start images (pay attention to the exact file names!)
-        self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_play.png")))
-        self.ui.btn_skip_back.setIcon(QIcon(get_resource_path("less15.png")))
-        self.ui.btn_skip_forward.setIcon(QIcon(get_resource_path("more15.png")))
+        self._refresh_playback_artwork()
         
         # 3. Make them larger so that all the beauty is clearly visible (you can play with the numbers 32, 32)
         self.ui.btn_play.setIconSize(QSize(32, 32))
@@ -6825,11 +6862,16 @@ def main():
         _instance_bridge.listen()
 
     from steempeg.ui.icon_utils import app_window_icon
+    from steempeg.ui.settings_prefs import resolve_steempeg_pro
+    from steempeg.infra.cache import read_json
+
+    settings = read_json(os.path.join(get_save_directory(), "cache", "settings.json")) or {}
+    apply_pro_appearance(resolve_steempeg_pro(settings), settings)
 
     _app_icon = app_window_icon()
-    icon_path = get_resource_path("logo.ico" if sys.platform == "win32" else "logo.png")
+    icon_path = themed_asset_path("logo.ico" if sys.platform == "win32" else "logo.png")
     if not os.path.isfile(icon_path):
-        icon_path = get_resource_path("logo.png")
+        icon_path = themed_asset_path("logo.png")
     if not _app_icon.isNull():
         app.setWindowIcon(_app_icon)
 
@@ -6893,9 +6935,6 @@ def main():
             QMessageBox.critical(None, "Interface Error", "Failed to build the main window!")
             sys.exit(1)
             
-        if not _app_icon.isNull():
-            window.ui.setWindowIcon(_app_icon)
-
         from PySide6.QtCore import Qt
         if sys.platform == "win32":
             # Flags and the native HWND wait until the splash has closed.

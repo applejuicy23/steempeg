@@ -1,10 +1,13 @@
 """Composite Choose Folder button with a combobox-style side that opens a panel."""
+from steempeg.ui.pro_appearance import accent_color, accent_qcolor, pro_accents_enabled
+
 from steempeg.ui import design_tokens as tok
-from PySide6.QtCore import Qt, QTimer, QRectF
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtCore import Qt, QTimer, QRectF, QSize
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
 
 from steempeg.ui.ui_density import COMFORT, UiDensity
+from steempeg.ui.icon_assets import folder_glyph
 
 _BUSY_TICK_MS = 40
 _BUSY_DEG_PER_TICK = 18
@@ -131,7 +134,7 @@ class _FolderPickerAddButton(QPushButton):
         painter.setPen(track)
         painter.drawEllipse(rect)
 
-        arc = QPen(_BUSY_ARC_COLOR)
+        arc = QPen(accent_qcolor(_BUSY_ARC_COLOR))
         arc.setWidthF(2.2)
         arc.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(arc)
@@ -150,7 +153,11 @@ class FolderScanHeader(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(20, 6, 20, 6)
         layout.setSpacing(6)
-        title = QLabel("📁 Library folders")
+        if pro_accents_enabled():
+            icon = QLabel()
+            icon.setPixmap(folder_glyph(accent_color(tok.ACCENT_PRIMARY)))
+            layout.addWidget(icon)
+        title = QLabel("Library folders" if pro_accents_enabled() else "📁 Library folders")
         title.setFont(tok.ui_qfont(13, weight=QFont.Weight.Bold))
         layout.addWidget(title)
         layout.addStretch(1)
@@ -185,7 +192,10 @@ class FolderPickerButton(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.main_btn = QPushButton("📂 Choose Folder…")
+        self._folder_label = "📂 Choose Folder…"
+        self.main_btn = QPushButton()
+        self.main_btn.setIconSize(QSize(16, 16))
+        self.refresh_accent_icon()
         self.main_btn.setObjectName("FolderPickerMain")
         self.main_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.main_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -234,7 +244,16 @@ class FolderPickerButton(QWidget):
             self.add_btn.set_busy(bool(busy))
 
     def set_folder_label(self, text, tooltip=""):
-        self.main_btn.setText(text)
+        self._folder_label = text
+        self.refresh_accent_icon()
         tip = tooltip or text
         self.main_btn.setToolTip(tip)
         self.setToolTip(tip)
+
+    def refresh_accent_icon(self) -> None:
+        if pro_accents_enabled():
+            self.main_btn.setText(self._folder_label.removeprefix("📂 "))
+            self.main_btn.setIcon(QIcon(folder_glyph(accent_color(tok.ACCENT_PRIMARY))))
+        else:
+            self.main_btn.setText(self._folder_label)
+            self.main_btn.setIcon(QIcon())

@@ -7,10 +7,11 @@ import time
 from copy import deepcopy
 
 from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, QSize, QTimer
-from PySide6.QtGui import QFont, QFontMetrics
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -28,6 +29,13 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.ui.icon_assets import title_bar_info_pixmap
+from steempeg.ui.pro_appearance import (
+    DEFAULT_PRO_ACCENT,
+    KEY_PRO_ACCENT_COLOR,
+    KEY_PRO_RED_ACCENTS,
+    KEY_PRO_RED_LOGO,
+    normalize_pro_accent,
+)
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.design_tokens import (
     KEY_UI_FONT,
@@ -204,7 +212,7 @@ from steempeg.ui.settings_prefs import (
     load_deck_controls,
     load_deck_controls_style,
     load_dev_mode,
-    load_steempeg_pro,
+    resolve_steempeg_pro,
     load_desktop_render_layout,
     load_display_timezone,
     load_ffmpeg_log_level,
@@ -1634,9 +1642,34 @@ class SettingsDialog(SteempegDialog):
 
         # ----- PRO -----
         pro_page, pro_lay = _tab_page(self)
-        self._steempeg_pro = bool(load_steempeg_pro(settings))
+        self._steempeg_pro = resolve_steempeg_pro(settings)
         self._pro_banner = self._build_pro_promo_banner()
         pro_lay.addWidget(self._pro_banner)
+        self._pro_appearance_options = QWidget(pro_page)
+        appearance_layout = QVBoxLayout(self._pro_appearance_options)
+        appearance_layout.setContentsMargins(0, 6, 0, 0)
+        color_row = QHBoxLayout()
+        color_row.addWidget(QLabel("Accent color"))
+        self._pro_accent_button = QPushButton()
+        self._pro_accent_button.setIconSize(QSize(16, 16))
+        self._pro_accent_button.clicked.connect(self._pick_pro_accent)
+        color_row.addWidget(self._pro_accent_button)
+        reset_color = QPushButton("Reset")
+        reset_color.clicked.connect(lambda: self._set_pro_accent(DEFAULT_PRO_ACCENT))
+        color_row.addWidget(reset_color)
+        color_row.addStretch()
+        appearance_layout.addLayout(color_row)
+        self._show_pro_accent(normalize_pro_accent(settings.get(KEY_PRO_ACCENT_COLOR)))
+        for key, label in (
+            (KEY_PRO_RED_ACCENTS, "Use PRO accent colors"),
+            (KEY_PRO_RED_LOGO, "Tint Steempeg logo"),
+        ):
+            option = SteempegCheckBox(label)
+            option.setChecked(bool(settings.get(key, True)))
+            option.toggled.connect(lambda checked, pref=key: self._set_pro_appearance(pref, checked))
+            appearance_layout.addWidget(option)
+        self._pro_appearance_options.setVisible(self._steempeg_pro)
+        pro_lay.addWidget(self._pro_appearance_options)
         pro_lay.addStretch(1)
         self._settings_pages.append(("PRO", pro_page, pro_lay))
 
@@ -2068,6 +2101,7 @@ class SettingsDialog(SteempegDialog):
         head = QHBoxLayout()
         head.setSpacing(12)
         logo = QLabel()
+        logo.setObjectName("SteempegBrandLogo")
         logo.setFixedSize(48, 48)
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo.setStyleSheet("background: transparent; border: none;")
@@ -2113,7 +2147,7 @@ class SettingsDialog(SteempegDialog):
         btn_off.setObjectName("ProPromoOffBtn")
         btn_off.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_off.setStyleSheet(_pro_action_button_stylesheet())
-        btn_off.setToolTip("Hide PRO badge / red splash chrome (settings only).")
+        btn_off.setToolTip("Turn off Steempeg PRO and its appearance options.")
         btn_off.clicked.connect(lambda: self._apply_steempeg_pro(False))
         from steempeg.ui.kofi_dialog import KofiSupportButton, kofi_cup_pixmap
 
@@ -2205,8 +2239,8 @@ class SettingsDialog(SteempegDialog):
         self._apply_steempeg_pro(True)
 
     def _apply_steempeg_pro(self, enabled: bool) -> None:
-        self._steempeg_pro = bool(enabled)
         value = normalize_steempeg_pro(enabled)
+        self._steempeg_pro = resolve_steempeg_pro({KEY_STEEMPEG_PRO: value})
         if hasattr(self._app, "save_user_settings"):
             self._app.save_user_settings(KEY_STEEMPEG_PRO, value)
         if hasattr(self._app, "_refresh_steempeg_pro_chrome"):
@@ -2215,6 +2249,30 @@ class SettingsDialog(SteempegDialog):
             except Exception:
                 pass
         self._sync_pro_promo_banner()
+        self._pro_appearance_options.setVisible(self._steempeg_pro)
+
+    def _set_pro_appearance(self, key: str, value: bool | str) -> None:
+        self._save_setting(key, value)
+        refresh = getattr(self._app, "_refresh_steempeg_pro_chrome", None)
+        if refresh is not None:
+            refresh()
+
+    def _pick_pro_accent(self) -> None:
+        color = QColorDialog.getColor(
+            QColor(self._pro_accent_button.text()), self, "Choose PRO accent color"
+        )
+        if color.isValid():
+            self._set_pro_accent(color.name())
+
+    def _set_pro_accent(self, color: str) -> None:
+        self._show_pro_accent(color)
+        self._set_pro_appearance(KEY_PRO_ACCENT_COLOR, color)
+
+    def _show_pro_accent(self, color: str) -> None:
+        swatch = QPixmap(16, 16)
+        swatch.fill(QColor(color))
+        self._pro_accent_button.setIcon(QIcon(swatch))
+        self._pro_accent_button.setText(color)
 
     def _save_setting(self, key: str, value) -> None:
         if hasattr(self._app, "save_user_settings"):

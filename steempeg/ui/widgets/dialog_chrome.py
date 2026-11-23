@@ -75,6 +75,8 @@ class _DialogTitleBar(QWidget):
             pixmap = app_logo_pixmap(icon_sz)
         if pixmap is not None and not pixmap.isNull():
             icon_lbl = QLabel()
+            if not icon_path:
+                icon_lbl.setObjectName("SteempegBrandLogo")
             apply_square_icon(icon_lbl, pixmap, icon_sz)
             root.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
             root.addSpacing(7)

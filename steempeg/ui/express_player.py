@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui.pro_appearance import themed_asset_path
 from steempeg.services.new_clip_watcher import NewClipInfo
 from steempeg.ui import design_tokens as tok
 from steempeg.ui import ui_theme as ut
@@ -369,6 +370,12 @@ class ExpressPlayerWindow(QWidget):
             self._timeline._apply_timeline_chrome_stylesheet()
         self._timeline.canvas.update()
 
+    def refresh_playback_artwork(self) -> None:
+        self._btn_skip_back.setIcon(QIcon(themed_asset_path("less15.png")))
+        self._btn_skip_forward.setIcon(QIcon(themed_asset_path("more15.png")))
+        glyph = self._btn_play.property("glyph") or "icon_play.png"
+        self._btn_play.setIcon(QIcon(themed_asset_path(glyph)))
+
     # -- layout ---------------------------------------------------------------
 
     def _build_header(self) -> QFrame:
@@ -556,7 +563,7 @@ class ExpressPlayerWindow(QWidget):
         btn = QPushButton()
         btn.setObjectName("ExpressIconBtn")
         btn.setFixedSize(box, box)
-        btn.setIcon(QIcon(get_resource_path(asset)))
+        btn.setIcon(QIcon(themed_asset_path(asset)))
         btn.setIconSize(QSize(icon_px, icon_px))
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -797,7 +804,7 @@ class ExpressPlayerWindow(QWidget):
         icon = "icon_pause.png" if playing else "icon_play.png"
         if self._btn_play.property("glyph") != icon:
             self._btn_play.setProperty("glyph", icon)
-            self._btn_play.setIcon(QIcon(get_resource_path(icon)))
+            self._btn_play.setIcon(QIcon(themed_asset_path(icon)))
 
     def toggle_play(self) -> None:
         """Plays or pauses; restarts from the beginning (or trim start) at the end."""

@@ -1,9 +1,11 @@
 """Refresh libraries: main button rescans all tabs; ▾ offers this-section + extras."""
 from steempeg.ui import design_tokens as tok
 from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QWidget
 
-from steempeg.ui.icon_assets import arrow_icon
+from steempeg.ui.icon_assets import arrow_icon, title_bar_update_pixmap
+from steempeg.ui.pro_appearance import accent_color, pro_accents_enabled
 from steempeg.ui.ui_density import COMFORT, UiDensity
 
 
@@ -83,7 +85,9 @@ class RefreshButton(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.main_btn = QPushButton("🔄 Refresh")
+        self.main_btn = QPushButton()
+        self.main_btn.setIconSize(QSize(14, 14))
+        self.refresh_accent_icon()
         self.main_btn.setObjectName("RefreshMain")
         self.main_btn.setToolTip(
             "Rescan clip folders and rebuild the list (cached icons and health only)"
@@ -131,3 +135,11 @@ class RefreshButton(QWidget):
         self.setStyleSheet(_refresh_style(dense))
         # Re-apply radius from intent (not isVisible — see __init__ note).
         self.set_menu_visible(getattr(self, "_menu_visible", True))
+
+    def refresh_accent_icon(self) -> None:
+        if pro_accents_enabled():
+            self.main_btn.setText("Refresh")
+            self.main_btn.setIcon(QIcon(title_bar_update_pixmap(accent_color(tok.ACCENT_PRIMARY), 14)))
+        else:
+            self.main_btn.setText("🔄 Refresh")
+            self.main_btn.setIcon(QIcon())

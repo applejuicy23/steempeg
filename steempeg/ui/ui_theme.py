@@ -255,8 +255,9 @@ def apply_palette(name: str) -> UiThemePalette:
 
 def set_stylesheet_if_changed(widget, stylesheet: str) -> None:
     """Avoid Qt's subtree-wide repolish for an identical stylesheet."""
-    if widget.styleSheet() != stylesheet:
-        widget.setStyleSheet(stylesheet)
+    from steempeg.ui.pro_appearance import set_accent_stylesheet
+
+    set_accent_stylesheet(widget, stylesheet)
 
 
 def chrome_colors_for_active() -> dict[str, str]:
@@ -1480,6 +1481,13 @@ def library_menu_stylesheet() -> str:
     return menu_stylesheet()
 
 
+def context_menu_stylesheet() -> str:
+    """Highlight the action under the pointer on clip and timeline menus."""
+    from steempeg.ui.pro_appearance import pro_accents_enabled
+
+    return menu_stylesheet(selected_mode="accent" if pro_accents_enabled() else "fill")
+
+
 def health_menu_stylesheet() -> str:
     """Clip/rendered health menus — keep colored icons on disabled rows."""
     return menu_stylesheet(
@@ -1648,6 +1656,8 @@ def clip_info_popup_host_stylesheet() -> str:
 
 def folders_menu_stylesheet() -> str:
     """Choose-folder multi-path popup — menu chrome + embedded folder rows."""
+    from steempeg.ui.pro_appearance import pro_accents_enabled
+
     p = _active
     if p.name == UI_THEME_DEFAULT:
         row_bg, row_border = "#2a2a2a", "#4a4a4a"
@@ -1661,6 +1671,7 @@ def folders_menu_stylesheet() -> str:
         menu_padding="4px 0",
         item_padding="8px 28px 8px 20px",
         item_margin="2px 6px",
+        selected_mode="accent" if pro_accents_enabled() else "fill",
         extra=f"""
     QMenu::item {{
         background: transparent;
@@ -1758,8 +1769,20 @@ def queue_menu_stylesheet() -> str:
 
 
 def preview_quality_menu_stylesheet() -> str:
-    """Player header preview-quality dropdown."""
+    """Shared player header dropdown for preview quality and preview zoom."""
+    from steempeg.ui.pro_appearance import pro_accents_enabled
+
     mc = menu_popup_colors()
+    checked_rule = """
+    QMenu::item:checked:enabled {
+        background-color: #3a3350;
+        color: #b29ae7;
+    }
+    QMenu::item:checked:selected:enabled {
+        background-color: #6b5a8e;
+        color: #ffffff;
+    }
+    """ if pro_accents_enabled() else ""
     return menu_stylesheet(
         menu_padding="4px 0px",
         item_padding="6px 28px 6px 16px",
@@ -1773,7 +1796,7 @@ def preview_quality_menu_stylesheet() -> str:
         padding-top: 2px;
         padding-bottom: 8px;
     }}
-    """,
+    """ + checked_rule,
     )
 
 

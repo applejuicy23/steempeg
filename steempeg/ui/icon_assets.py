@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from PySide6.QtGui import QIcon, QPainter, QPixmap, QColor, QTransform, QImage
+from PySide6.QtGui import QIcon, QPainter, QPainterPath, QPixmap, QColor, QTransform, QImage
 from PySide6.QtCore import Qt
 
 from steempeg.core.dash.health import WARNING_ICON_FILE, ClipHealth, HEALTH_ICON_FILES
@@ -290,6 +290,32 @@ def title_bar_update_pixmap(color: str | QColor, size: int = 16) -> QPixmap:
     visual center (source asset is non-square 387×396 with uneven padding).
     """
     return _tinted_cropped_asset("update.png", color, size)
+
+
+def folder_glyph(color: str, size: int = 16) -> QPixmap:
+    """Folder silhouette for surfaces that use a tintable toolbar icon."""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.scale(size / 16, size / 16)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(color))
+    folder = QPainterPath()
+    folder.moveTo(1.5, 4.5)
+    folder.quadTo(1.5, 3, 3, 3)
+    folder.lineTo(6.2, 3)
+    folder.lineTo(8.2, 5)
+    folder.lineTo(13, 5)
+    folder.quadTo(14.5, 5, 14.5, 6.5)
+    folder.lineTo(14.5, 11.5)
+    folder.quadTo(14.5, 13, 13, 13)
+    folder.lineTo(3, 13)
+    folder.quadTo(1.5, 13, 1.5, 11.5)
+    folder.closeSubpath()
+    painter.drawPath(folder)
+    painter.end()
+    return pixmap
 
 
 def update_arrows_spin_frame(

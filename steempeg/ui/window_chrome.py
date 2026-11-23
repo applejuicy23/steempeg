@@ -597,6 +597,7 @@ class SteempegTitleBar(QWidget):
         pixmap = app_logo_pixmap(icon_sz)
         if pixmap is not None and not pixmap.isNull():
             icon_lbl = QLabel()
+            icon_lbl.setObjectName("SteempegBrandLogo")
             apply_square_icon(icon_lbl, pixmap, icon_sz)
             icon_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             root.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
