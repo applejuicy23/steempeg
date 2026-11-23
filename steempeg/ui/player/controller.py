@@ -38,7 +38,7 @@ from steempeg.core.rendered_media import (
     probe_media_duration_sec,
 )
 from steempeg.infra.paths import get_resource_path, get_save_directory
-from steempeg.ui.pro_appearance import themed_asset_path
+from steempeg.ui.pro_appearance import playback_transport_icon
 from steempeg.ui.player.immersive_chrome import enter_immersive_chrome, exit_immersive_chrome
 from steempeg.ui.window_chrome import (
     collapse_content_insets,
@@ -490,7 +490,7 @@ class PlayerMixin:
             self.ui.label_time.setText("00:00 / 00:00")
 
         if hasattr(self.ui, 'btn_play'):
-            self.ui.btn_play.setIcon(QIcon(themed_asset_path("icon_play.png")))
+            self._sync_play_button_icon(paused=True)
 
     def _park_mpv_embed_when_not_showing(self):
         """Hide the native mpv HWND while the stack shows placeholder/blank."""
@@ -1210,12 +1210,10 @@ class PlayerMixin:
                 paused = bool(getattr(self.player, "pause", True))
             except Exception:
                 paused = True
-        icon_path = (
-            themed_asset_path("icon_play.png")
-            if paused
-            else themed_asset_path("icon_pause.png")
-        )
-        self.ui.btn_play.setIcon(QIcon(icon_path))
+        icon = playback_transport_icon("icon_play.png" if paused else "icon_pause.png")
+        button = self.ui.btn_play
+        if button.icon().cacheKey() != icon.cacheKey():
+            button.setIcon(icon)
 
     # VIDEO PLAYER CONTROLS
     def toggle_play(self, *args, pulse: bool = False):
@@ -1244,9 +1242,19 @@ class PlayerMixin:
             at_end = bool(getattr(self.player, "eof_reached", False)) and not getattr(
                 self, "_restart_from_eof", False
             )
-            if self.player.pause or at_end:
+            was_paused = bool(self.player.pause)
+            if was_paused or at_end:
                 if not at_end:
-                    dur = self._playback_duration_sec()
+                    rendered = getattr(self, "_rendered_media_path", None)
+                    cached = getattr(self, "_rendered_duration_cache", None)
+                    if rendered and cached and cached[0] == os.path.normpath(rendered):
+                        dur = cached[1]
+                    elif rendered:
+                        # The duration probe can run outside this click. Keep the
+                        # transport responsive while the rendered file is opening.
+                        dur = getattr(self.player, "duration", None)
+                    else:
+                        dur = self._playback_duration_sec()
                     try:
                         pos = self.player.time_pos
                     except Exception:
@@ -1258,11 +1266,11 @@ class PlayerMixin:
                     self._restart_from_eof = True
                     self._ignore_playback_stall(0.5)
                     self.custom_timeline.force_jump(0)
-                self.player.pause = False
+                paused = False
             else:
                 self._restart_from_eof = False
-                self.player.pause = True
-            paused = bool(self.player.pause)
+                paused = True
+            self.player.pause = paused
             logging.debug("[video-click] transport applied: paused=%s pulse=%s", paused, pulse)
             self._sync_play_button_icon(paused=paused)
             if pulse:
@@ -4153,7 +4161,7 @@ class PlayerMixin:
             # here cancels the reveal timer and leaves the native embed parked
             # behind video_blank_frame. Reveal/finish own the switch gates.
             if hasattr(self.ui, "btn_play"):
-                self.ui.btn_play.setIcon(QIcon(themed_asset_path("icon_pause.png")))
+                self._sync_play_button_icon()
             return
 
         if attempt < 10:
@@ -4480,7 +4488,7 @@ class PlayerMixin:
         QTimer.singleShot(80, lambda: self._poll_rendered_media_duration(file_path, switch_gen))
 
         if hasattr(self.ui, "btn_play"):
-            self.ui.btn_play.setIcon(QIcon(themed_asset_path("icon_pause.png")))
+            self._sync_play_button_icon(paused=False)
 
         if hasattr(self, "update_clip_health_button"):
             self.update_clip_health_button()
@@ -5814,8 +5822,7 @@ class PlayerMixin:
 
         # --- IMMEDIATELY UPDATE PLAY BUTTON ICON TO PAUSE ---
         if hasattr(self.ui, 'btn_play'):
-            icon_path = themed_asset_path("icon_pause.png")
-            self.ui.btn_play.setIcon(QIcon(icon_path))
+            self._sync_play_button_icon(paused=False)
         
 
     def _mpv_trim_ring(self):

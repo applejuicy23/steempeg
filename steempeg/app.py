@@ -4,7 +4,7 @@ _STARTUP_ENTRY = _startup_perf_counter()
 from steempeg.version import APP_VERSION_STR
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.ui_theme import set_stylesheet_if_changed as _theme_style
-from steempeg.ui.pro_appearance import apply_pro_appearance, themed_asset_path
+from steempeg.ui.pro_appearance import apply_pro_appearance, playback_transport_icon, themed_asset_path
 from steempeg.ui.main_window import MainWindow
 from steempeg.infra.logging import global_exception_handler, setup_logging, session_timestamp, mpv_log_path, prune_old_logs
 from steempeg.infra import paths
@@ -333,11 +333,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         refresh_pro_controls(self)
 
     def _refresh_playback_artwork(self) -> None:
+        for asset in ("icon_play.png", "icon_pause.png"):
+            playback_transport_icon(asset)
         self._sync_play_button_icon()
         for name, asset in (("btn_skip_back", "less15.png"), ("btn_skip_forward", "more15.png")):
             button = getattr(self.ui, name, None)
             if button is not None:
-                button.setIcon(QIcon(themed_asset_path(asset)))
+                button.setIcon(playback_transport_icon(asset))
 
     def _wire_pro_encoding_controls(self) -> None:
         from steempeg.ui.render_pro_controls import remember_quality_choice

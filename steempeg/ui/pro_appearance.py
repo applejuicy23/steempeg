@@ -7,7 +7,7 @@ from functools import lru_cache
 from weakref import WeakKeyDictionary, WeakSet
 
 from PySide6.QtCore import QEvent, QObject, QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import QApplication, QWidget
 
 from steempeg.infra.paths import get_resource_path
@@ -217,6 +217,16 @@ def themed_asset_path(name: str) -> str:
         if os.path.isfile(path):
             return path
     return source
+
+
+def playback_transport_icon(name: str) -> QIcon:
+    """Reuse decoded transport artwork for the active interface palette."""
+    return _playback_transport_icon(name, _interface_color)
+
+
+@lru_cache(maxsize=20)
+def _playback_transport_icon(name: str, _color: str | None) -> QIcon:
+    return QIcon(QPixmap(themed_asset_path(name)))
 
 
 class _AccentStyles(QObject):
