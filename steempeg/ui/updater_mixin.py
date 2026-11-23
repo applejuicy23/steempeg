@@ -281,7 +281,10 @@ class UpdaterMixin:
         if hasattr(tb, "dev_requested"):
             tb.dev_requested.connect(self.show_dev_dialog)
         if hasattr(tb, "kofi_requested"):
+            from steempeg.ui.settings_prefs import load_hide_kofi
+
             tb.kofi_requested.connect(self.show_kofi_dialog)
+            self._sync_title_bar_kofi(load_hide_kofi(self.load_user_settings()))
         if hasattr(tb, "update_available_clicked"):
             tb.update_available_clicked.connect(self.check_for_updates)
         if hasattr(tb, "hide_update_available_requested"):

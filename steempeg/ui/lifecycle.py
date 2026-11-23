@@ -834,10 +834,20 @@ class LifecycleMixin:
         dlg = DevModeDialog(self.cache_dir, parent=getattr(self, "ui", None))
         dlg.exec()
 
+    def _sync_title_bar_kofi(self, hidden: bool) -> None:
+        title_bar = getattr(self.ui, "title_bar", None)
+        button = getattr(title_bar, "btn_title_kofi", None)
+        if button is not None:
+            button.setVisible(not hidden)
+            title_bar.clear_shell_tool_hover()
+
     def show_kofi_dialog(self):
         """Title-bar tip jar — Donate Me card with Ko-fi link."""
         from steempeg.ui.kofi_dialog import show_kofi_dialog
+        from steempeg.ui.settings_prefs import load_hide_kofi
 
+        if load_hide_kofi(self.load_user_settings()):
+            return
         try:
             show_kofi_dialog(parent=getattr(self, "ui", None))
         finally:
@@ -912,7 +922,7 @@ class LifecycleMixin:
         self._about_is_open = True
 
         from steempeg.ui import ui_theme as ut
-        from steempeg.ui.settings_prefs import resolve_steempeg_pro
+        from steempeg.ui.settings_prefs import load_hide_kofi, resolve_steempeg_pro
 
         settings = {}
         if hasattr(self, "load_user_settings"):
@@ -1133,18 +1143,18 @@ class LifecycleMixin:
         btn_report.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_report.clicked.connect(self.show_report_dialog)
 
-        from steempeg.ui.kofi_dialog import KofiSupportButton
-
-        btn_kofi = KofiSupportButton("Support", 16)
-        btn_kofi.setObjectName("AboutKofiBtn")
-        btn_kofi.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_kofi.clicked.connect(self.show_kofi_dialog)
-
         btn_close = QPushButton("Close")
         btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close.clicked.connect(dialog.accept)
         btn_row.addWidget(btn_report)
-        btn_row.addWidget(btn_kofi)
+        if not load_hide_kofi(settings):
+            from steempeg.ui.kofi_dialog import KofiSupportButton
+
+            btn_kofi = KofiSupportButton("Support", 16)
+            btn_kofi.setObjectName("AboutKofiBtn")
+            btn_kofi.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_kofi.clicked.connect(self.show_kofi_dialog)
+            btn_row.addWidget(btn_kofi)
         btn_row.addWidget(btn_close)
         btn_row.addStretch(1)
         content.addLayout(btn_row)
