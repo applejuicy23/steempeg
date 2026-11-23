@@ -5,13 +5,21 @@ live geometry as a cancellable Settings preview; Apply commits the form.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
                               QLabel, QPushButton, QSplitter, QVBoxLayout)
 
+from steempeg.ui import design_tokens as tok
 from steempeg.ui import ui_theme as ut
 from steempeg.ui import portable_splitter_reveal as shell
+from steempeg.ui.pro_appearance import accent_qcolor, set_accent_stylesheet, visible_accent
+
+
+def _resize_button_style(*, pad: str = "4px 12px") -> str:
+    return ut.dash_secondary_button_stylesheet(radius=16, pad=pad) + """
+        QPushButton:focus:enabled { border-color: #b29ae7; }
+    """
 
 
 def capture_geometry(app):
@@ -80,7 +88,9 @@ class _BoundaryHandle(QPushButton):
         self.setCursor(Qt.CursorShape.SizeHorCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAutoDefault(False)
-        self.setStyleSheet(ut.about_secondary_button_stylesheet())
+        set_accent_stylesheet(self, _resize_button_style())
+        self.setIcon(editor.drag_icon)
+        self.setIconSize(QSize(16, 16))
         self.setToolTip("Drag to resize. Left / Right: 1%; Shift: 5%.")
 
     def mousePressEvent(self, event):  # noqa: N802
@@ -146,28 +156,46 @@ class PaneLayoutEditor(QDialog):
         self._tick.setSingleShot(True)
         self._tick.setInterval(32)
         self._tick.timeout.connect(self._flush_drag)
+        pixmap = QPixmap(32, 32)
+        pixmap.setDevicePixelRatio(2)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        with QPainter(pixmap) as painter:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(QColor("#eeeeee"), 1.4, Qt.PenStyle.SolidLine,
+                                Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.drawLine(2, 8, 14, 8)
+            painter.drawPolyline([QPoint(5, 5), QPoint(2, 8), QPoint(5, 11)])
+            painter.drawPolyline([QPoint(11, 5), QPoint(14, 8), QPoint(11, 11)])
+        self.drag_icon = QIcon(pixmap)
         self.handles = {key: _BoundaryHandle(self, key) for key in ("clips", "queue")}
         self.bar = QFrame(self)
-        palette = ut.active_palette()
-        self.bar.setStyleSheet(
-            f"QFrame {{background: {palette.bg_settings_panel}; border: 1px solid {palette.border_card}; border-radius: 12px;}}"
-            "QLabel {color: #eeeeee; border: none; background: transparent; font-weight: bold;}"
-        )
+        self.bar.setStyleSheet(ut.footer_pill_stylesheet())
         row = QHBoxLayout(self.bar)
-        row.setContentsMargins(12, 8, 8, 8)
-        row.addWidget(QLabel("Panel layout", self.bar))
-        row.addStretch(1)
+        row.setContentsMargins(14, 8, 8, 8)
+        row.setSpacing(8)
+        title = QLabel("Panel layout", self.bar)
+        title.setFont(tok.ui_qfont(pixel_size=14, weight=QFont.Weight.Bold))
+        title.setStyleSheet("color: #ffffff; background: transparent; border: none; padding-right: 6px;")
+        row.addWidget(title)
         self.cancel_button = QPushButton("Cancel", self.bar)
         from steempeg.ui.widgets.apply_button import ApplyButton
 
         self.apply_button = ApplyButton(self.bar)
         self.done_button = QPushButton("Done", self.bar)
-        for button, style in ((self.cancel_button, ut.about_secondary_button_stylesheet()),
-                              (self.apply_button, ut.about_secondary_button_stylesheet()),
-                              (self.done_button, ut.about_accent_button_stylesheet())):
+        for button in (self.cancel_button, self.apply_button, self.done_button):
             button.setAutoDefault(False)
-            button.setStyleSheet(style)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFixedHeight(32)
+            button.setMinimumWidth(76)
             row.addWidget(button)
+        secondary = _resize_button_style()
+        set_accent_stylesheet(self.cancel_button, secondary)
+        set_accent_stylesheet(self.apply_button, _resize_button_style(pad="4px 5px"))
+        set_accent_stylesheet(self.done_button, secondary + """
+            QPushButton { background-color: rgba(178, 154, 231, 58); border-color: #8e7cc3; }
+            QPushButton:hover { background-color: rgba(178, 154, 231, 72); border-color: #b29ae7; }
+            QPushButton:pressed { background-color: rgba(178, 154, 231, 37); }
+        """)
         self.cancel_button.clicked.connect(self.reject)
         self.apply_button.clicked.connect(self.apply_settings)
         self.apply_button.setToolTip("Save current Settings and continue adjusting panel widths")
@@ -235,23 +263,32 @@ class PaneLayoutEditor(QDialog):
     def _place_controls(self):
         if self._snapshot is None:
             return
-        self.bar.setGeometry(max(8, (self.width() - 520) // 2), max(8, self.height() - 72),
-                             min(520, self.width() - 16), 56)
+        bar_size = self.bar.sizeHint()
+        self.bar.setGeometry((self.width() - bar_size.width()) // 2,
+                             self.height() - bar_size.height() - 12,
+                             bar_size.width(), bar_size.height())
         dirty = getattr(self.settings, "_form_has_unsaved_changes", None)
         self.apply_button.setEnabled(bool(dirty and dirty()))
         positions = self.boundaries()
         if self.hover and "queue_parent" in self._snapshot:
             self._queue_preview.setGeometry(self._queue_rect())
             self._queue_preview_layout.activate()
-        for index, (key, handle) in enumerate(self.handles.items()):
-            name = "Clips" if key == "clips" else ("Hover queue" if self.hover else "Queue")
-            value = self.values[0 if key == "clips" else 2]
-            handle.setText(f"↔  {name} {value}%")
-            handle.setAccessibleName(f"{name} width {value} percent")
-            width = max(154, handle.sizeHint().width())
-            # Separate lanes remain independently draggable when lines coincide.
-            handle.setGeometry(max(4, min(self.width() - width - 4, positions[key] - width // 2)),
-                               42 + index * 50, width, 40)
+        clips, player, queue = self.values
+        queue_name = "Hover queue" if self.hover else "Queue"
+        self.handles["clips"].setText(f"Clips {clips}%  ·  Player {player}%")
+        self.handles["clips"].setAccessibleName(f"Clips {clips} percent, Player {player} percent")
+        self.handles["queue"].setText(f"{queue_name} {queue}%")
+        self.handles["queue"].setAccessibleName(f"{queue_name} width {queue} percent")
+        top = self._shell_rect().top() + 4
+        for key, handle in self.handles.items():
+            width = handle.sizeHint().width()
+            handle.setGeometry(max(8, min(self.width() - width - 8, positions[key] - width // 2)),
+                               top, width, 32)
+        clips_rect = self.handles["clips"].geometry()
+        queue_handle = self.handles["queue"]
+        # Stagger the controls only when the boundary labels would overlap.
+        if clips_rect.adjusted(-8, 0, 8, 0).intersects(queue_handle.geometry()):
+            queue_handle.move(queue_handle.x(), clips_rect.bottom() + 7)
         self.update()
 
     def _preview(self):
@@ -261,6 +298,7 @@ class PaneLayoutEditor(QDialog):
 
     def begin_drag(self, key, global_pos):
         self._drag = (key, self.mapFromGlobal(global_pos).x() - self.boundaries()[key])
+        self.update()
 
     def move_drag(self, global_pos):
         if self._drag is not None:
@@ -274,6 +312,7 @@ class PaneLayoutEditor(QDialog):
             self._tick.stop()
             self._flush_drag()
             self._drag = None
+            self.update()
 
     def _flush_drag(self):
         if self._drag is None or self._pending_pointer is None:
@@ -306,9 +345,8 @@ class PaneLayoutEditor(QDialog):
 
     def _boundary_at(self, pos):
         candidates = []
-        for index, (key, x) in enumerate(self.boundaries().items()):
-            box = self._label_rect(index, x)
-            if abs(pos.x() - x) <= 9 or box.contains(pos):
+        for key, x in self.boundaries().items():
+            if abs(pos.x() - x) <= 9:
                 candidates.append((abs(pos.x() - x), key))
         if len(candidates) == 2 and candidates[0][0] == candidates[1][0]:
             return "clips" if pos.y() < self.height() / 2 else "queue"
@@ -338,35 +376,33 @@ class PaneLayoutEditor(QDialog):
         else:
             super().mouseReleaseEvent(event)
 
-    def _label_rect(self, index, x):
-        return QRectF(max(4, min(self.width() - 228, x - 112)),
-                      self.height() * .45 + index * 50, 224, 34)
-
     def paintEvent(self, event):  # noqa: N802
         if self._snapshot is None:
             return
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 55))
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 42))
+        accent = accent_qcolor(QColor("#b29ae7"))
+        surface = QColor(ut.active_palette().bg_shell)
+        guide_accent = visible_accent(accent, surface, minimum=3.0)
         if self.hover:
             rect = self._queue_rect()
-            painter.fillRect(rect, QColor(38, 30, 52, 125))
-            painter.setPen(QPen(QColor("#bfa5f4"), 1, Qt.PenStyle.DashLine))
+            tint = QColor(accent)
+            tint.setAlpha(52)
+            painter.fillRect(rect, tint)
+            edge = QColor(guide_accent)
+            edge.setAlpha(140)
+            painter.setPen(QPen(edge, 1))
             painter.drawRect(rect.adjusted(0, 0, -1, -1))
-        for index, (key, x) in enumerate(self.boundaries().items()):
-            painter.setPen(QPen(QColor("#ffffff"), 2,
-                                Qt.PenStyle.DashLine if key == "queue" and self.hover else Qt.PenStyle.SolidLine))
-            painter.drawLine(x, 30, x, self.height() - 82)
-            if key == "clips":
-                text = f"Clips {self.values[0]}%  ·  Player {self.values[1]}%"
-            else:
-                text = f"{'Hover queue' if self.hover else 'Queue'} {self.values[2]}%"
-            box = self._label_rect(index, x)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#1b1821"))
-            painter.drawRoundedRect(box, 8, 8)
-            painter.setPen(QColor("#ffffff"))
-            painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+        span = self._shell_rect()
+        for key, x in self.boundaries().items():
+            is_hover_queue = key == "queue" and self.hover
+            active = self._drag is not None and self._drag[0] == key
+            color = guide_accent if is_hover_queue or active else QColor("#eeeeee")
+            style = Qt.PenStyle.DashLine if is_hover_queue else Qt.PenStyle.SolidLine
+            painter.setPen(QPen(QColor(0, 0, 0, 155), 3))
+            painter.drawLine(x, span.top(), x, span.bottom())
+            painter.setPen(QPen(color, 2 if active else 1, style))
+            painter.drawLine(x, span.top(), x, span.bottom())
 
     def eventFilter(self, obj, event):  # noqa: N802
         if obj is self.host and self._snapshot is not None and not self._finished:

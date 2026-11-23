@@ -58,9 +58,6 @@ _SHEET_INSET_OUTER = 8
 _ANIM_MS = 240
 _HIDE_MS = 160
 _WATCH_MS = 50
-_DWMWA_TRANSITIONS_FORCEDISABLED = 3
-_DWMWA_SYSTEMBACKDROP_TYPE = 38
-_DWMSBT_NONE = 1
 _BRACE_GRIP_W = 5.0
 
 
@@ -214,38 +211,6 @@ def _brace_grip_rect(rect: QRectF, *, open_left: bool) -> QRectF:
     return QRectF(cx - line_w * 0.5, top, line_w, max(20.0, bot - top))
 
 
-def _strip_overlay_dwm(widget: QWidget) -> None:
-    """Kill Win11 mica / accent glow / DWM hide-transition on the Tool HWND."""
-    if sys.platform != "win32" or widget is None:
-        return
-    try:
-        from steempeg.ui.window_chrome import refresh_dwm_chrome
-
-        refresh_dwm_chrome(widget)
-    except Exception:
-        pass
-    try:
-        import ctypes
-
-        hwnd = int(widget.winId())
-        if not hwnd:
-            return
-        dwm = ctypes.windll.dwmapi
-        none = ctypes.c_int(_DWMSBT_NONE)
-        dwm.DwmSetWindowAttribute(
-            hwnd, _DWMWA_SYSTEMBACKDROP_TYPE, ctypes.byref(none), ctypes.sizeof(none)
-        )
-        freeze = ctypes.c_int(1)
-        dwm.DwmSetWindowAttribute(
-            hwnd,
-            _DWMWA_TRANSITIONS_FORCEDISABLED,
-            ctypes.byref(freeze),
-            ctypes.sizeof(freeze),
-        )
-    except Exception:
-        pass
-
-
 def _resolve_host(app) -> QWidget | None:
     """Content wrap sits above the splitter; the window itself is covered by appShell."""
     ui = getattr(app, "ui", None)
@@ -293,28 +258,13 @@ class _Hotspot(QWidget):
 
 
 class _Grip(QWidget):
-    """Protruding resize handle — own Tool HWND (not a strip on the RQ overlay).
-
-    Keeping the grip as a child of the translucent overlay left a full-height
-    ghost column the width of ``_BULGE_OUT`` (Win ignores mask on that strip).
-    Painted as a filled edge tab (hill → flat → hill) against the panel seam,
-    with the same inner grip stripe as the old handle — not a capsule, not a ``{``.
-    """
+    """Resize tab beside the queue, in the same host as the panel."""
 
     def __init__(self, overlay: "QueueHoverOverlay"):
-        super().__init__(None)
+        super().__init__(overlay.parentWidget())
         self._overlay = overlay
         self.setObjectName("queueHoverGrip")
-        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
-        self.setWindowFlags(
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.NoDropShadowWindowHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setAutoFillBackground(False)
         self.setCursor(Qt.CursorShape.SizeHorCursor)
@@ -325,16 +275,15 @@ class _Grip(QWidget):
         self._hovered = False
         self.hide()
 
-    def place(self, global_rect: QRect) -> None:
-        """Move/show this brace grip in global screen coords."""
+    def place(self, rect: QRect) -> None:
+        """Place the grip in host coordinates."""
         if self._overlay._controller.resize_grip_hidden():
             self.hide()
             return
-        if global_rect.width() < 2 or global_rect.height() < 2:
+        if rect.width() < 2 or rect.height() < 2:
             self.hide()
             return
-        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
-        self.setGeometry(global_rect)
+        self.setGeometry(rect)
         open_left = not bool(getattr(self._overlay, "_from_left", False))
         body = _brace_body_path(QRectF(self.rect()), open_left=open_left)
         try:
@@ -344,27 +293,8 @@ class _Grip(QWidget):
         except RuntimeError:
             self.hide()
             return
-        if sys.platform == "win32":
-            try:
-                from steempeg.infra.window_focus import detach_tool_ownership
-
-                detach_tool_ownership(self)
-            except Exception:
-                pass
-            try:
-                import ctypes
-
-                self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-                self.createWinId()
-                hwnd = int(self.winId())
-                if hwnd:
-                    ctypes.windll.user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
-                    if not self.isVisible():
-                        self.setVisible(True)
-                    return
-            except Exception:
-                pass
         self.show()
+        self.raise_()
 
     def paintEvent(self, event):  # noqa: N802
         bg, border, grip_idle, grip_hot = _overlay_chrome()
@@ -448,15 +378,11 @@ class _Grip(QWidget):
 
 
 class QueueHoverOverlay(QWidget):
-    """Rounded host that holds the real Render Queue panel.
-
-    A child widget cannot paint over embedded mpv (``wid=`` HWND). Same family
-    as buffering / timeline chips: a frameless ``Qt.Tool`` composited by the OS.
-    """
+    """Native child surface above embedded video, clipped by the desktop shell."""
 
     def __init__(self, controller: "QueueHoverController", parent=None):
         ui = getattr(getattr(controller, "_app", None), "ui", None)
-        super().__init__(None if sys.platform == "win32" else (parent or ui))
+        super().__init__(parent or ui)
         self._controller = controller
         self._slide = 0.0
         self._panel_w = 360
@@ -468,29 +394,11 @@ class QueueHoverOverlay(QWidget):
         self._slide_pix: QPixmap | None = None
         self._mask_key: tuple | None = None
         self.setObjectName("queueHoverOverlay")
-        # Seal before the Tool HWND exists. Otherwise Windows flashes an empty
-        # bordered frame (transparent inside) while the splash is still up.
-        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
-        self.setWindowFlags(
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.NoDropShadowWindowHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setAutoFillBackground(False)
         self.setMouseTracking(True)
         self.hide()
-        if sys.platform == "win32":
-            try:
-                from steempeg.infra.window_focus import detach_tool_ownership
-
-                detach_tool_ownership(self)
-            except Exception:
-                pass
-
         self._body = QFrame(self)
         self._body.setObjectName("queueHoverBody")
         self._body.setStyleSheet("background: transparent; border: none;")
@@ -498,7 +406,6 @@ class QueueHoverOverlay(QWidget):
         self._body_lay.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
         self._body_lay.setSpacing(0)
 
-        # Own Tool HWND — must not share the overlay's full-height translucent strip.
         self._grip = _Grip(self)
 
         self._anim = QPropertyAnimation(self, b"slide", self)
@@ -612,49 +519,24 @@ class QueueHoverOverlay(QWidget):
         card_h = max(180, int(span.height()) - inset_y * 2)
         shown = int(round(card_w * self._slide))
         outer = _SHEET_INSET_OUTER
-        if self.isWindow():
-            origin = host.mapToGlobal(span.topLeft())
-            ox, oy = int(origin.x()), int(origin.y())
-        else:
-            parent = self.parentWidget()
-            top_left = (
-                host.mapTo(parent, span.topLeft()) if parent is not None else span.topLeft()
-            )
-            ox, oy = int(top_left.x()), int(top_left.y())
-        # Overlay is plate-only — grip is a separate Tool (no full-height ghost strip).
+        ox, oy = span.x(), span.y()
         if self._from_left:
             card_x = ox + shown - card_w + outer
         else:
             card_x = ox + int(span.width()) - shown - outer
         overlay_y = oy + inset_y
-        # Keep the Linux Tool inside the work area. Moving a top-level window
-        # beyond the screen lets the compositor clamp it, turning a slide into
-        # a left-to-right mask reveal. Translate the card inside a fixed canvas.
-        offset = 0
-        canvas_x = card_x
-        if sys.platform != "win32":
-            canvas_x = (ox + outer if self._from_left else
-                        ox + int(span.width()) - card_w - outer)
-            offset = card_x - canvas_x
-        self.setGeometry(canvas_x, overlay_y, card_w, card_h)
-        if sys.platform == "win32":
-            try:
-                from steempeg.infra.window_focus import detach_tool_ownership
-
-                detach_tool_ownership(self)
-            except Exception:
-                pass
-        self._card = QRect(offset, 0, card_w, card_h)
+        panel_rect = QRect(card_x, overlay_y, card_w, card_h)
+        canvas = panel_rect.intersected(host.rect()).intersected(span)
+        self.setGeometry(canvas)
+        self._card = panel_rect.translated(-canvas.topLeft())
         self._body.setGeometry(self._card)
         grip_h = min(_BULGE_H, max(64, card_h - 48))
         grip_y = max(8, (card_h - grip_h) // 2)
         if self._from_left:
-            grip_global = QRect(card_x + card_w, overlay_y + grip_y, _BULGE_OUT, grip_h)
+            grip_rect = QRect(card_x + card_w, overlay_y + grip_y, _BULGE_OUT, grip_h)
         else:
-            grip_global = QRect(card_x - _BULGE_OUT, overlay_y + grip_y, _BULGE_OUT, grip_h)
-        self._bulge = QRect(0, 0, grip_global.width(), grip_global.height())
-        # This remains a Tool above native mpv, but must never draw or receive
-        # clicks outside the app. The snapshot avoids live queue repaints on X11.
+            grip_rect = QRect(card_x - _BULGE_OUT, overlay_y + grip_y, _BULGE_OUT, grip_h)
+        self._bulge = QRect(0, 0, grip_rect.width(), grip_rect.height())
         clip = _host_clip_rect(self, host) if self._slide > 0.0 else QRect()
         mask_key = (int(card_w), int(card_h), int(_RADIUS), self._card.x(), clip.getRect())
         if mask_key != self._mask_key:
@@ -670,7 +552,7 @@ class QueueHoverOverlay(QWidget):
             and self.isVisible()
             and not self._controller.resize_grip_hidden()
         ):
-            self._grip.place(grip_global)
+            self._grip.place(grip_rect)
         else:
             try:
                 self._grip.hide()
@@ -815,22 +697,8 @@ class QueueHoverController(QObject):
             self.conceal(animated=False)
 
     def _raise_overlay(self) -> None:
-        """Clicking the shell can stack it over the unowned Tool — lift it back (no activate)."""
-        if sys.platform != "win32" or not self._app_is_foreground():
-            return
-        try:
-            import ctypes
-
-            flags = 0x0001 | 0x0002 | 0x0010 | 0x0200  # NOSIZE|NOMOVE|NOACTIVATE|NOOWNERZORDER
-            user32 = ctypes.windll.user32
-            for widget in (self._overlay, getattr(self._overlay, "_grip", None)):
-                if widget is None or not widget.isVisible():
-                    continue
-                hwnd = int(widget.winId())
-                if hwnd:
-                    user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, flags)  # HWND_TOP
-        except Exception:
-            logging.debug("queue hover raise skipped", exc_info=True)
+        self._overlay.raise_()
+        self._overlay._grip.raise_()
 
     def peek_add_to_queue(self, clip_paths: list[str]) -> None:
         """Open the hover drawer and preview where Add to queue would land."""
@@ -1089,37 +957,14 @@ class QueueHoverController(QObject):
             except RuntimeError:
                 pass
         self._host = host
+        self._overlay.setParent(host)
+        self._overlay._grip.setParent(host)
         self._hotspot.setParent(host)
         host.installEventFilter(self)
 
     def _show_overlay(self) -> None:
-        overlay = self._overlay
-        overlay.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
-        overlay.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        if sys.platform == "win32":
-            try:
-                from steempeg.infra.window_focus import detach_tool_ownership
-
-                detach_tool_ownership(overlay)
-            except Exception:
-                pass
-            try:
-                import ctypes
-
-                overlay.createWinId()
-                hwnd = int(overlay.winId())
-                if hwnd:
-                    ctypes.windll.user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
-                    if not overlay.isVisible():
-                        overlay.setVisible(True)
-                    _strip_overlay_dwm(overlay)
-                    # No raise_() — that re-stacks the shell over other apps
-                    # without touching the mpv embed HWND.
-                    return
-            except Exception:
-                pass
-        overlay.show()
-        _strip_overlay_dwm(overlay)
+        self._overlay.show()
+        self._raise_overlay()
 
     def _run_slide(self, target: float, *, animated: bool) -> None:
         anim = self._overlay._anim

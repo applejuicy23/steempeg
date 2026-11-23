@@ -698,11 +698,9 @@ class SettingsDialog(SteempegDialog):
         else:
             pane_controls.addWidget(
                 self._hint(
-                    "Hides the splitter handles and the hover queue's drag tab. "
-                    "Drag the panes first, then turn this on, or set the widths below. "
-                    "Clips cannot pass its minimum; raising it shrinks the player. "
-                    "The queue keeps the minimum and maximum of its current mode, "
-                    "hover or the docked splitter. Off, the handles stay."
+                    "Desktop hides splitter handles and the hover queue's drag tab by default. "
+                    "Use the pencil or the percentage fields to resize the panels. "
+                    "Turn this off to restore the legacy drag handles."
                 )
             )
         # Filter time fields put the face on the field (bold 13px, padding
