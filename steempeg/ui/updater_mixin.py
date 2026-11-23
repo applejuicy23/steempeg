@@ -22,6 +22,7 @@ from steempeg.ui.message_dialog import (
     steempeg_critical,
     steempeg_warning,
 )
+from steempeg.ui.settings_prefs import load_hide_release_notice_bell
 from steempeg.ui.update_center import UpdateCenterDialog
 from steempeg.ui.update_confirm_dialog import UpdateConfirmChoice, UpdateConfirmDialog
 from steempeg.version import APP_VERSION_STR
@@ -56,6 +57,11 @@ class _SilentUpdateCheckThread(QThread):
 
 
 class UpdaterMixin:
+    def _sync_release_notice_bell_visibility(self, hidden: bool) -> None:
+        button = getattr(getattr(self.ui, "title_bar", None), "btn_release_notices", None)
+        if button is not None:
+            button.setVisible(not hidden)
+
     def start_release_notices(self) -> None:
         from PySide6.QtCore import QTimer
         from steempeg.services.release_notices import NOTICES_URL
@@ -280,6 +286,7 @@ class UpdaterMixin:
             tb.check_updates_requested.connect(self.check_for_updates)
         if hasattr(tb, "dev_requested"):
             tb.dev_requested.connect(self.show_dev_dialog)
+        self._sync_release_notice_bell_visibility(load_hide_release_notice_bell(self.load_user_settings()))
         if hasattr(tb, "kofi_requested"):
             from steempeg.ui.settings_prefs import load_hide_kofi
 

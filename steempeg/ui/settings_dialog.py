@@ -149,6 +149,8 @@ from steempeg.ui.shell_chooser import (
 from steempeg.ui.settings_prefs import (
     KEY_HIDE_KOFI,
     load_hide_kofi,
+    KEY_HIDE_RELEASE_NOTICE_BELL,
+    load_hide_release_notice_bell,
     CLOCK_FORMAT_LABELS,
     DATE_FORMAT_LABELS,
     DEFAULT_MARKERS_ON_STRIP,
@@ -1403,6 +1405,9 @@ class SettingsDialog(SteempegDialog):
         # ----- Notifications -----
         notify, n = _tab_page(self)
         n.addWidget(self._section("Notifications"))
+        self._chk_show_notice_bell = SteempegCheckBox("Show announcements bell in title bar")
+        self._chk_show_notice_bell.setChecked(not load_hide_release_notice_bell(settings))
+        n.addWidget(self._chk_show_notice_bell)
         self._chk_notify = SteempegCheckBox("Notify when render finishes or fails")
         self._chk_notify.setChecked(
             bool(settings.get(KEY_NOTIFY_ON_RENDER_COMPLETE, True))
@@ -3658,6 +3663,12 @@ class SettingsDialog(SteempegDialog):
 
         pending[KEY_NOTIFY_ON_RENDER_COMPLETE] = self._chk_notify.isChecked()
         pending[KEY_NOTIFY_ON_NEW_CLIP] = self._chk_notify_new_clip.isChecked()
+        hide_notice_bell = not self._chk_show_notice_bell.isChecked()
+        pending[KEY_HIDE_RELEASE_NOTICE_BELL] = hide_notice_bell
+        if hide_notice_bell != load_hide_release_notice_bell(prev):
+            sync_bell = getattr(self._app, "_sync_release_notice_bell_visibility", None)
+            if sync_bell is not None:
+                deferred.append(lambda: sync_bell(hide_notice_bell))
         pending[KEY_PAUSE_PREVIEW_DURING_RENDER] = self._chk_pause_preview.isChecked()
         from steempeg.ui.settings_prefs import (
             KEY_FRIENDLY_REPEAT_RENDER_TITLES,

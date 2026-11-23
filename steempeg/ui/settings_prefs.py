@@ -661,6 +661,13 @@ def load_hide_kofi(settings: dict | None) -> bool:
     return (settings or {}).get(KEY_HIDE_KOFI) is True
 
 
+KEY_HIDE_RELEASE_NOTICE_BELL = "hide_release_notice_bell"
+
+
+def load_hide_release_notice_bell(settings: dict | None) -> bool:
+    return (settings or {}).get(KEY_HIDE_RELEASE_NOTICE_BELL) is True
+
+
 # ----- Tray / background mode -----
 
 # Red close button hides the main window to the tray instead of quitting.
