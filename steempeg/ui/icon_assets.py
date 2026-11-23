@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from PySide6.QtGui import QIcon, QPainter, QPainterPath, QPixmap, QColor, QTransform, QImage
-from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon, QPainter, QPixmap, QColor, QTransform, QImage, QPen
+from PySide6.QtCore import QPointF, QRectF, Qt
 
 from steempeg.core.dash.health import WARNING_ICON_FILE, ClipHealth, HEALTH_ICON_FILES
 from steempeg.infra.paths import get_resource_path
@@ -379,6 +379,43 @@ def rendering_badge_icon(color: str | QColor, size: int = 18) -> QIcon:
 def paused_status_pixmap(color: str | QColor, size: int = 22) -> QPixmap:
     """Tinted ``pauserender.png`` bars for the Paused plaque (same master as dash Pause)."""
     return _status_glyph_pixmap("pauserender.png", color, size)
+
+
+def render_status_circle_frame(
+    color: str, size: int, state: str, *, scale: float = 1.0, dpr: float = 1.0
+) -> QPixmap:
+    """Draw the dashboard circle and its symbols in logical pixels."""
+    pixels = round(size * dpr)
+    frame = QPixmap(pixels, pixels)
+    frame.setDevicePixelRatio(dpr)
+    frame.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(frame)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.translate(size / 2, size / 2)
+    painter.scale(size / 24, size / 24)
+    radius = 12 * scale
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(color))
+    painter.drawEllipse(QPointF(), radius, radius)
+
+    if state == "paused":
+        painter.setBrush(QColor("#1a1a1a"))
+        for x in (-4.0, 1.0):
+            painter.drawRoundedRect(QRectF(x, -5.0, 3.0, 10.0), 1.5, 1.5)
+    elif state in ("preparing", "cancelling", "error"):
+        painter.setPen(QPen(Qt.GlobalColor.white, 2.1, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        if state == "error":
+            painter.drawLine(QPointF(-3.6, -3.6), QPointF(3.6, 3.6))
+            painter.drawLine(QPointF(-3.6, 3.6), QPointF(3.6, -3.6))
+        else:
+            direction = -1 if state == "cancelling" else 1
+            tip = QPointF(direction * 5.0, 0)
+            painter.drawLine(QPointF(direction * -5.0, 0), tip)
+            painter.drawLine(QPointF(direction * 1.0, -4.0), tip)
+            painter.drawLine(tip, QPointF(direction * 1.0, 4.0))
+
+    painter.end()
+    return frame
 
 
 def paused_badge_icon(color: str | QColor, size: int = 18) -> QIcon:

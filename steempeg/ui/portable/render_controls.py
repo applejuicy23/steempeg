@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import ui_theme as ut
-from steempeg.ui.pro_appearance import ACTIVE_RENDER_COLOR, ERROR_RENDER_COLOR, accent_color, pro_accents_enabled
 from steempeg.ui.widgets.animated_render_bar import AnimatedRenderBar
 
 # Exact copies of desktop render-dashboard templates (app.py).
@@ -81,7 +80,7 @@ _STATUS_COLORS = {
     "cancelled": "#ff4444",
 }
 
-_DOT_SIZE = 12
+_DOT_SIZE = 24
 _PCT_COL = 40
 _STATUS_ROW_H = 24
 _GAME_ICON = 24
@@ -192,7 +191,7 @@ class PortableRenderControlStrip(QFrame):
         progress_row = QHBoxLayout()
         progress_row.setSpacing(8)
 
-        self.progress = AnimatedRenderBar(self)
+        self.progress = AnimatedRenderBar(self, render_dashboard=True)
         progress_row.addWidget(self.progress, 1)
 
         self.pct_label = QLabel("0%")
@@ -402,15 +401,12 @@ class PortableRenderControlStrip(QFrame):
             f"background-color: {color}; border-radius: {r}px;"
         )
 
-    def apply_status(self, text: str, state: str = "ready", percent: float | None = None) -> None:
+    def apply_status(
+        self, text: str, state: str = "ready", percent: float | None = None, *, color: str | None = None
+    ) -> None:
         state = state or "ready"
         self._state = state
-        color = accent_color(_STATUS_COLORS.get(state, "#a871ff"))
-        if pro_accents_enabled():
-            if state == "rendering":
-                color = ACTIVE_RENDER_COLOR
-            elif state == "error":
-                color = ERROR_RENDER_COLOR
+        color = color or _STATUS_COLORS.get(state, "#a871ff")
         display = (text or "Ready").strip() or "Ready"
         self.status_label.setText(display)
         self.status_label.setStyleSheet(
@@ -449,6 +445,8 @@ class PortableRenderControlStrip(QFrame):
                     queue_index = int(getattr(job, "queue_index", 0) or 0) or None
             if queue_index and hasattr(app, "_paint_status_dot_queue_badge"):
                 app._paint_status_dot_queue_badge(queue_index, color)
+            elif hasattr(app, "_paint_status_dot_plain"):
+                app._paint_status_dot_plain(color)
             else:
                 self._set_dot_color(color)
 

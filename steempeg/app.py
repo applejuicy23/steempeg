@@ -396,7 +396,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             return bar
 
         old = bar
-        bar = AnimatedRenderBar(parent or old.parentWidget())
+        bar = AnimatedRenderBar(parent or old.parentWidget(), render_dashboard=True)
         bar.setObjectName("progress_render")
         old_parent = old.parentWidget()
         layout = old_parent.layout() if old_parent else None
@@ -6461,16 +6461,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     getattr(self, "_status_indicator_color", "#a871ff")
                 )
             elif (
-                hasattr(self, "_sync_dash_queue_status_chrome")
+                not getattr(self, "_is_rendering", False)
                 and self._sync_dash_queue_status_chrome()
             ):
-                pass  # queue Ready / Completed / index badge restored
+                pass
+            elif dot.text().isdigit():
+                self._paint_status_dot_queue_badge(int(dot.text()), status_color)
             else:
-                dot_sz = 8 if dense.compact else 12
-                dot.setFixedSize(dot_sz, dot_sz)
-                dot.setStyleSheet(
-                    f"background-color: {status_color}; border-radius: {dot_sz // 2}px;"
-                )
+                self._paint_status_dot_plain(status_color)
 
         pad = "1px 8px" if dense.compact else "6px 14px"
         radius = max(8, dense.dash_btn_h // 2)

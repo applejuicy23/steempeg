@@ -8,6 +8,7 @@ through self.
 from steempeg.ui import design_tokens as tok
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -99,6 +100,7 @@ from steempeg.ui.icon_assets import (
     UPDATE_ARROWS_DEG_PER_TICK,
     UPDATE_ARROWS_TICK_MS,
     canceled_badge_icon,
+    render_status_circle_frame,
     completed_badge_icon,
     error_badge_icon,
     loading_wave_frame,
@@ -126,7 +128,7 @@ from steempeg.render.encode_speed import (
     normalize_encode_speed,
 )
 from steempeg.ui.pro_appearance import (
-    ERROR_RENDER_COLOR, accent_color, pro_accents_enabled, render_status_color, themed_asset_path,
+    accent_color, render_status_color, themed_asset_path,
 )
 from steempeg.render.queue import (
     JobStatus,
@@ -807,8 +809,14 @@ class RenderMixin:
         if getattr(self, "_queue_batch_active", False):
             total = max(1, int(getattr(self, "_batch_total", 0) or 0))
             current = max(1, min(int(getattr(self, "_batch_current", 0) or 0), total))
-            msg = f"({current}/{total}) {msg}"
-        self.update_status_indicator(msg, "rendering")
+            batch = f"({current}/{total})"
+            if msg.startswith("Rendering"):
+                msg = msg.replace("Rendering", f"Rendering {batch}", 1)
+            else:
+                msg = f"{batch} {msg}"
+        self._last_render_progress_text = msg
+        if not getattr(self, "_encode_paused", False) and not getattr(self, "_render_cancelling", False):
+            self.update_status_indicator(msg, "rendering")
 
     @staticmethod
     def _format_pct_label(percent):
@@ -907,7 +915,8 @@ class RenderMixin:
 
         colors = {
             "ready": "#4CAF50",
-            "rendering": "#a871ff",
+            "preparing": "#a970ff",
+            "rendering": STATUS_COLORS[JobStatus.RENDERING],
             "busy": "#a871ff",
             "paused": "#ffcc00",
             "error": "#ff4444",
@@ -916,12 +925,9 @@ class RenderMixin:
             "cancelled": "#ff4444",
             "accent": ACCENT_PRIMARY,
         }
-        color = accent_color(colors.get(state, "#a871ff"))
-        if pro_accents_enabled():
-            if state == "rendering":
-                color = render_status_color(JobStatus.RENDERING)
-            elif state == "error":
-                color = render_status_color(JobStatus.ERROR)
+        color = colors.get(state, "#a871ff")
+        if state in ("busy", "accent"):
+            color = accent_color(color)
         queue_index = None
         job = None
         if self._queue_is_active():
@@ -960,6 +966,7 @@ class RenderMixin:
         suppress_queue_badge = (
             library_scan_busy or getattr(self, "_update_check_busy", False)
         )
+        self._status_indicator_state = state
         if getattr(self, "_update_check_busy", False):
             self._paint_status_dot_update_spin(color)
         elif library_scan_busy:
@@ -992,7 +999,7 @@ class RenderMixin:
 
         if state == "success":
             percent = 100.0
-        elif state in ("ready", "error", "accent"):
+        elif state in ("ready", "preparing", "error", "accent"):
             percent = 0.0
         # busy/rendering: keep percent parsed from "(N%)" in the status text
 
@@ -1050,7 +1057,7 @@ class RenderMixin:
                 self.label_pct.setText("0%")
 
         strip_state = "ready" if state == "accent" else state
-        self._sync_portable_render_strip(full_text, strip_state, percent)
+        self._sync_portable_render_strip(full_text, strip_state, percent, color=color)
         self._maybe_reglue_dash_after_startup_status()
 
     def _maybe_reglue_dash_after_startup_status(self) -> None:
@@ -1121,6 +1128,7 @@ class RenderMixin:
 
     def _paint_status_dot_update_spin(self, color: str) -> None:
         """Spinning purple update.png — same asset/cadence as portable Updates."""
+        self._stop_status_render_pulse()
         if getattr(self, "_status_loading_wave_active", False):
             self._stop_status_dot_loading_wave()
         dot = self._status_dot_widget()
@@ -1182,6 +1190,7 @@ class RenderMixin:
 
     def _paint_status_dot_loading_wave(self, color: str) -> None:
         """Three purple dots bouncing in a wave — library Loading / search busy."""
+        self._stop_status_render_pulse()
         if getattr(self, "_status_update_spin_active", False):
             self._stop_status_dot_update_spin()
         dot = self._status_dot_widget()
@@ -1244,56 +1253,45 @@ class RenderMixin:
             self._stop_status_dot_loading_wave()
 
     def _paint_status_dot_plain(self, color: str) -> None:
-        self._stop_status_dot_update_spin()
-        self._stop_status_dot_loading_wave()
-        # Clear any leftover Part-strip Rendering orbit from older builds.
-        timer = getattr(self, "_status_rendering_timer", None)
-        if timer is not None and timer.isActive():
-            timer.stop()
-        self._status_rendering_active = False
-        dot = self._status_dot_widget()
-        if dot is None:
-            return
-        try:
-            dot.setPixmap(QPixmap())
-        except (RuntimeError, Exception):
-            pass
-        dense = getattr(self, "_ui_density", None)
-        sz = 8 if dense is not None and getattr(dense, "compact", False) else 12
-        # Portable strip uses a fixed 12px plain dot for visual parity with dash.
-        if getattr(self, "_portable_shell", False) and getattr(
-            self, "_portable_render_strip", None
-        ) is not None:
-            sz = 12
-        dot.setFixedSize(sz, sz)
-        dot.setText("")
-        radius = max(3, sz // 2)
-        dot.setStyleSheet(f"background-color: {color}; border-radius: {radius}px;")
-        self._status_indicator_color = color
+        self._paint_status_circle(color)
 
     def _paint_status_dot_queue_badge(self, index: int, color: str) -> None:
-        """Numbered circle — yellow queue / orange render / red error / green done."""
-        self._stop_status_dot_update_spin()
-        self._stop_status_dot_loading_wave()
-        # Clear any leftover Part-strip Rendering orbit from older builds.
-        timer = getattr(self, "_status_rendering_timer", None)
+        self._paint_status_circle(color, index=max(1, index))
+
+    def _stop_status_render_pulse(self) -> None:
+        timer = getattr(self, "_status_render_pulse_timer", None)
         if timer is not None and timer.isActive():
             timer.stop()
-        self._status_rendering_active = False
+
+    def _refresh_status_render_pulse(self) -> None:
+        dot = self._status_dot_widget()
+        if dot is None or getattr(self, "_status_indicator_state", None) != "rendering":
+            self._stop_status_render_pulse()
+            return
+        elapsed = time.monotonic() - self._status_render_pulse_started
+        scale = 0.92 + 0.08 * math.cos(math.tau * elapsed / 1.35)
+        dot.setPixmap(render_status_circle_frame(
+            self._status_indicator_color, dot.width(), "rendering",
+            scale=scale, dpr=dot.devicePixelRatioF(),
+        ))
+
+    def _paint_status_circle(self, color: str, *, index: int | None = None) -> None:
+        state = getattr(self, "_status_indicator_state", "ready")
+        pulse = index is None and state == "rendering"
+        if not pulse:
+            self._stop_status_render_pulse()
+        if getattr(self, "_status_update_spin_active", False):
+            self._stop_status_dot_update_spin()
+        if getattr(self, "_status_loading_wave_active", False):
+            self._stop_status_dot_loading_wave()
         dot = self._status_dot_widget()
         if dot is None:
             return
-        try:
-            dot.setPixmap(QPixmap())
-        except (RuntimeError, Exception):
-            pass
         dense = getattr(self, "_ui_density", None)
-        # Slightly larger than the plain status dot so the queue index digit stays readable.
         sz = 22 if dense is not None and getattr(dense, "compact", False) else 24
         font = 12 if sz <= 22 else 13
         dot.setFixedSize(sz, sz)
         dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        dot.setText(str(max(1, int(index))))
         # Construction pins Ready cluster to 24px (plain 12px dot). Grow with badge
         # so «Ready» + digit are not clipped — that clip read as READY above a
         # sunken button strip on cold start.
@@ -1310,15 +1308,30 @@ class RenderMixin:
                 col.setMinimumWidth(max(int(col.minimumWidth()), 40))
         except RuntimeError:
             pass
-        radius = sz // 2
-        # Dark digit on bright badge colours (yellow/orange/green); light on red.
-        ink = "#ffffff" if color.lower() in ("#ff4444", "#ff0000", ERROR_RENDER_COLOR) else "#1a1a1a"
-        dot.setStyleSheet(
-            f"background-color: {color}; color: {ink}; border-radius: {radius}px; "
-            f"font-size: {font}px; font-weight: 800; "
-            f"font-family: {tok.FONT_APP};"
-        )
         self._status_indicator_color = color
+        if index is not None:
+            ink = "#ffffff" if color.lower() == STATUS_COLORS[JobStatus.ERROR] else "#1a1a1a"
+            dot.setText(str(index))
+            dot.setStyleSheet(
+                f"background-color: {color}; color: {ink}; border-radius: {sz // 2}px; "
+                f"font-size: {font}px; font-weight: 800; font-family: {tok.FONT_APP};"
+            )
+            return
+
+        dot.setStyleSheet("background: transparent; border: none;")
+        if not pulse:
+            dot.setPixmap(render_status_circle_frame(color, sz, state, dpr=dot.devicePixelRatioF()))
+            return
+
+        timer = getattr(self, "_status_render_pulse_timer", None)
+        if timer is None:
+            timer = self._status_render_pulse_timer = QTimer(self)
+            timer.setInterval(16)
+            timer.timeout.connect(self._refresh_status_render_pulse)
+        if not timer.isActive():
+            self._status_render_pulse_started = time.monotonic()
+            timer.start()
+        self._refresh_status_render_pulse()
 
     def _sync_dash_queue_status_chrome(self) -> bool:
         """Drive Ready cluster + left summary from the **next-to-render** job.
@@ -1406,13 +1419,15 @@ class RenderMixin:
         text: str | None = None,
         state: str | None = None,
         percent: float | None = None,
+        *,
+        color: str | None = None,
     ) -> None:
         strip = getattr(self, "_portable_render_strip", None)
         if strip is None:
             return
         try:
             if text is not None and state is not None and hasattr(strip, "apply_status"):
-                strip.apply_status(text, state, percent)
+                strip.apply_status(text, state, percent, color=color)
             elif hasattr(strip, "sync_from_app"):
                 strip.sync_from_app()
             if hasattr(strip, "sync_game_header"):
@@ -7782,6 +7797,8 @@ class RenderMixin:
         self._is_rendering = True
         self._encode_paused = False
         self._active_render_job = job
+        self._last_render_progress_text = None
+        self._render_cancelling = False
         self._pending_render_error_override = None
         # New encode supersedes any prior Completed / Error plaque for this session.
         self._completed_plaque_clip_path = None
@@ -7790,7 +7807,7 @@ class RenderMixin:
         live = self.render_queue.get(getattr(job, "id", "")) or job
         live.status = JobStatus.RENDERING
         self._apply_status_strip_summary(live)
-        self.update_status_indicator(label, "rendering")
+        self.update_status_indicator(label, "rendering" if batch_mode else "preparing")
         logging.info("--- RENDER STARTED ---")
 
         self.refresh_render_queue_panel()
@@ -8227,6 +8244,7 @@ class RenderMixin:
         """ Cancel Button Handler """
         logging.warning("User cancelled rendering (Cancel)")
         if getattr(self, "render_thread", None) and self.render_thread.isRunning():
+            self._render_cancelling = True
             self.update_status_indicator("Cancelling... Please wait", "cancelling")
             if hasattr(self.ui, 'btn_cancel'): self.ui.btn_cancel.setEnabled(False)
             if hasattr(self.ui, 'btn_pause'): self.ui.btn_pause.setEnabled(False)
@@ -8247,7 +8265,13 @@ class RenderMixin:
                 self.update_status_indicator("Paused...", "paused")
             else:
                 if hasattr(self.ui, 'btn_pause'): self._set_desktop_pause_label("Pause")
-                self.update_status_indicator("Processing...", "rendering")
+                last = getattr(self, "_last_render_progress_text", None)
+                if last:
+                    self.update_status_indicator(last, "rendering")
+                elif getattr(self, "_queue_batch_active", False):
+                    self.update_status_indicator("Rendering", "rendering")
+                else:
+                    self.update_status_indicator("Initializing...", "preparing")
             self.update_playback_badge()
 
     def on_render_finished(self, success, error_msg, output_file):

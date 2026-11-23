@@ -34,6 +34,7 @@ from steempeg.ui.pro_appearance import (
     KEY_PRO_ACCENT_COLOR,
     KEY_PRO_RED_ACCENTS,
     KEY_PRO_RED_LOGO,
+    KEY_PRO_RENDER_BAR_ACCENT,
     normalize_pro_accent,
 )
 from steempeg.ui import design_tokens as tok
@@ -1658,12 +1659,13 @@ class SettingsDialog(SteempegDialog):
         color_row.addStretch()
         appearance_layout.addLayout(color_row)
         self._show_pro_accent(normalize_pro_accent(settings.get(KEY_PRO_ACCENT_COLOR)))
-        for key, label in (
-            (KEY_PRO_RED_ACCENTS, "Use PRO accent colors"),
-            (KEY_PRO_RED_LOGO, "Tint Steempeg logo"),
+        for key, label, default in (
+            (KEY_PRO_RED_ACCENTS, "Use PRO accent colors", True),
+            (KEY_PRO_RED_LOGO, "Tint Steempeg logo", True),
+            (KEY_PRO_RENDER_BAR_ACCENT, "Use PRO accent for render progress", False),
         ):
             option = SteempegCheckBox(label)
-            option.setChecked(bool(settings.get(key, True)))
+            option.setChecked(bool(settings.get(key, default)))
             option.toggled.connect(lambda checked, pref=key: self._set_pro_appearance(pref, checked))
             appearance_layout.addWidget(option)
         self._pro_appearance_options.setVisible(self._steempeg_pro)

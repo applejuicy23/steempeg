@@ -9,15 +9,11 @@ from PySide6.QtCore import Qt, QTimer, QRectF
 from PySide6.QtGui import QColor, QLinearGradient, QPainter
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from steempeg.ui.pro_appearance import (
-    ACTIVE_RENDER_COLOR, ERROR_RENDER_COLOR, accent_qcolor, pro_accents_enabled,
-)
+from steempeg.ui.pro_appearance import accent_qcolor, render_bar_accent, visible_accent
 
 _TRACK = QColor("#414141")
 _GRADIENT_START = QColor("#6b5a8e")
 _GRADIENT_END = QColor("#b29ae7")
-_RENDER_GRADIENT_START = QColor("#b32d2d")
-_RENDER_GRADIENT_END = QColor(ACTIVE_RENDER_COLOR)
 _SHIMMER = QColor(255, 255, 255, 72)
 
 _STATE_FILL = {
@@ -39,8 +35,9 @@ _INDETERMINATE_CUTOFF = 0.35
 class AnimatedRenderBar(QWidget):
     """Thin horizontal bar with eased progress and optional shimmer."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, render_dashboard: bool = False):
         super().__init__(parent)
+        self._render_dashboard = render_dashboard
         self.setMinimumHeight(int(_BAR_H))
         self.setMaximumHeight(int(_BAR_H))
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -74,7 +71,7 @@ class AnimatedRenderBar(QWidget):
         if state == self._state and state not in ("ready", "error"):
             return
         self._state = state
-        if state in ("ready", "error"):
+        if state in ("ready", "error", "preparing"):
             self._indeterminate = None
             self._target = 0.0
         elif state == "success":
@@ -122,7 +119,7 @@ class AnimatedRenderBar(QWidget):
     def _ensure_timer(self):
         needs_motion = (
             self._indeterminate is not None
-            or self._state in ("rendering", "busy")
+            or self._state in ("preparing", "rendering", "busy")
             or abs(self._display - self._target) > 0.05
         )
         if needs_motion:
@@ -141,7 +138,7 @@ class AnimatedRenderBar(QWidget):
             self._display = self._target
             moved = True
 
-        if self._indeterminate is not None or self._state in ("rendering", "busy"):
+        if self._indeterminate is not None or self._state in ("preparing", "rendering", "busy"):
             self._shimmer = (self._shimmer + 0.014) % 1.0
             moved = True
 
@@ -169,7 +166,9 @@ class AnimatedRenderBar(QWidget):
             painter.end()
             return
 
-        if self._state == "rendering" and self._display < _INDETERMINATE_CUTOFF:
+        if self._state == "preparing" or (
+            self._state == "rendering" and self._display < _INDETERMINATE_CUTOFF
+        ):
             self._paint_marquee(painter, track, radius)
             painter.end()
             return
@@ -190,8 +189,7 @@ class AnimatedRenderBar(QWidget):
             grad.setColorAt(1.0, end)
             painter.setBrush(grad)
         elif isinstance(mode, QColor):
-            color = QColor(ERROR_RENDER_COLOR) if self._state == "error" and pro_accents_enabled() else mode
-            painter.setBrush(color)
+            painter.setBrush(mode)
         else:
             painter.end()
             return
@@ -204,8 +202,13 @@ class AnimatedRenderBar(QWidget):
         painter.end()
 
     def _gradient_colors(self) -> tuple[QColor, QColor]:
-        if self._state == "rendering" and pro_accents_enabled():
-            return _RENDER_GRADIENT_START, _RENDER_GRADIENT_END
+        if self._state == "preparing":
+            return _GRADIENT_START, _GRADIENT_END
+        if self._state == "rendering" and self._render_dashboard:
+            color = render_bar_accent()
+            if color is not None:
+                return visible_accent(color.darker(130), _TRACK, minimum=3.0), color
+            return _GRADIENT_START, _GRADIENT_END
         return accent_qcolor(_GRADIENT_START), accent_qcolor(_GRADIENT_END)
 
     def _segment_gradient(self, x: float, seg: float) -> QLinearGradient:

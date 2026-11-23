@@ -15,9 +15,8 @@ from steempeg.infra.paths import get_resource_path
 KEY_PRO_RED_ACCENTS = "pro_red_accents"
 KEY_PRO_RED_LOGO = "pro_red_logo"
 KEY_PRO_ACCENT_COLOR = "pro_accent_color"
+KEY_PRO_RENDER_BAR_ACCENT = "pro_render_bar_accent"
 DEFAULT_PRO_ACCENT = "#d64545"
-ACTIVE_RENDER_COLOR = "#d64545"
-ERROR_RENDER_COLOR = "#a0364c"
 
 # Map the existing brand colors, leaving semantic colors (trim, errors,
 # success, warnings) out of the palette.
@@ -82,6 +81,7 @@ _PLAYER_ICONS = {
 }
 _interface_color: str | None = None
 _logo_color: str | None = None
+_render_bar_accent: str | None = None
 
 
 def normalize_pro_accent(value: object) -> str:
@@ -110,6 +110,10 @@ def _palette_for_color(color: str) -> dict[str, str]:
 
 def pro_accents_enabled() -> bool:
     return _interface_color is not None
+
+
+def render_bar_accent() -> QColor | None:
+    return QColor(_render_bar_accent) if _render_bar_accent else None
 
 
 def pro_brand_color() -> QColor:
@@ -189,13 +193,8 @@ def _qss_accent(match: re.Match) -> str:
 
 
 def render_status_color(status, fallback: str = "#ffcc00") -> str:
-    from steempeg.render.queue import JobStatus, STATUS_COLORS
+    from steempeg.render.queue import STATUS_COLORS
 
-    if pro_accents_enabled():
-        if status == JobStatus.RENDERING:
-            return ACTIVE_RENDER_COLOR
-        if status == JobStatus.ERROR:
-            return ERROR_RENDER_COLOR
     return STATUS_COLORS.get(status, fallback)
 
 
@@ -306,11 +305,14 @@ def set_accent_stylesheet(widget: QWidget, stylesheet: str) -> None:
 
 
 def apply_pro_appearance(enabled: bool, settings: dict) -> tuple[bool, bool]:
-    """Apply the two independent PRO appearance preferences."""
-    global _interface_color, _logo_color
+    """Apply the PRO appearance preferences."""
+    global _interface_color, _logo_color, _render_bar_accent
     color = normalize_pro_accent(settings.get(KEY_PRO_ACCENT_COLOR))
     accents = color if enabled and settings.get(KEY_PRO_RED_ACCENTS, True) else None
     logo = color if enabled and settings.get(KEY_PRO_RED_LOGO, True) else None
+    render_bar = color if enabled and settings.get(KEY_PRO_RENDER_BAR_ACCENT, False) else None
+    render_bar_changed = render_bar != _render_bar_accent
+    _render_bar_accent = render_bar
     old_accents = _interface_color
     changed = (accents != old_accents, logo != _logo_color)
     app = QApplication.instance()
@@ -327,6 +329,7 @@ def apply_pro_appearance(enabled: bool, settings: dict) -> tuple[bool, bool]:
             styler.enable()
         else:
             styler.disable()
+    if app is not None and (changed[0] or render_bar_changed):
         for window in app.topLevelWidgets():
             window.update()
             for child in window.findChildren(QWidget):
