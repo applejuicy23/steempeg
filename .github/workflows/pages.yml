@@ -47,7 +47,7 @@ jobs:
           rm -rf public
           mkdir -p public/assets public/media public/changelog
           python website/build_changelog.py --out public/changelog
-          cp website/landing/index.html website/landing/styles.css website/landing/changelog.html website/landing/changelog.css website/landing/donate.html website/landing/steempeg-meta.json public/
+          cp website/landing/index.html website/landing/styles.css website/landing/changelog.html website/landing/changelog.css website/landing/donate.html website/landing/steempeg-meta.json website/landing/notices.json public/
           cp assets/logo.png public/assets/logo.png
           # Product screenshots (README gallery)
           cp docs/readme/steempeg50_1.png public/media/

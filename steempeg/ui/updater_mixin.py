@@ -19,8 +19,6 @@ from steempeg.services.update_job import UpdateJob, spawn_update_handler
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.github_rate_limit_dialog import GitHubRateLimitDialog
 from steempeg.ui.message_dialog import (
-    DialogButton,
-    steempeg_alert_actions,
     steempeg_critical,
     steempeg_warning,
 )
@@ -58,6 +56,84 @@ class _SilentUpdateCheckThread(QThread):
 
 
 class UpdaterMixin:
+    def start_release_notices(self) -> None:
+        from PySide6.QtCore import QTimer
+        from steempeg.services.release_notices import NOTICES_URL
+        from steempeg.ui.release_communication import request_release_json
+
+        button = getattr(getattr(self.ui, "title_bar", None), "btn_release_notices", None)
+        if button is None:
+            return
+        button.clicked.connect(self._open_release_notices)
+        self._release_notices = []
+        QTimer.singleShot(
+            2500, self.ui,
+            lambda: request_release_json(self.ui, NOTICES_URL, self._receive_release_notices, limit=65536),
+        )
+
+    def _receive_release_notices(self, payload) -> None:
+        from steempeg.services.release_notices import notices_for_version
+
+        self._release_notices = notices_for_version(payload, APP_VERSION_STR)
+        self._refresh_release_notice_bell()
+
+    def _refresh_release_notice_bell(self) -> None:
+        from steempeg.ui.settings_layouts import stroke_svg_icon
+
+        saved = self.load_user_settings().get("read_release_notices", [])
+        read = {item for item in saved if isinstance(item, str)} if isinstance(saved, list) else set()
+        unread = [notice for notice in self._release_notices if notice.id not in read]
+        urgent = any(notice.critical for notice in unread)
+        color = "#ff6c6c" if urgent else "#b29ae7" if unread else "#cccccc"
+        button = self.ui.title_bar.btn_release_notices
+        button.setIcon(stroke_svg_icon("settings_tab_notifications.svg", color, 16))
+        label = "Announcements" if not unread else f"Announcements · {len(unread)} unread"
+        if urgent:
+            label += " · Important notice"
+        button.setToolTip(label)
+        button.setAccessibleName(label)
+
+    def _open_release_notices(self) -> None:
+        from steempeg.ui.release_communication import ReleaseNoticesDialog
+
+        notices = self._release_notices
+        dialog = ReleaseNoticesDialog(notices, self.ui)
+        dialog.exec()
+        if notices:
+            saved = self.load_user_settings().get("read_release_notices", [])
+            read = [item for item in saved if isinstance(item, str)] if isinstance(saved, list) else []
+            ids = list(dict.fromkeys([notice.id for notice in notices] + read))[:64]
+            self.save_user_settings("read_release_notices", ids)
+            self._refresh_release_notice_bell()
+        open_updates = dialog.open_update_center
+        dialog.deleteLater()
+        if open_updates:
+            self.check_for_updates()
+
+    def show_first_launch_release_notes(self, updated_from=None, backup_folder=None) -> None:
+        """Show highlights once after an upgrade, including the updater's first launch."""
+        from steempeg.services.release_notices import release_key
+
+        if getattr(self, "_release_welcome_checked", False):
+            return
+        if QApplication.activeModalWidget() is not None:
+            from PySide6.QtCore import QTimer
+
+            QTimer.singleShot(500, self.ui, lambda: self.show_first_launch_release_notes(updated_from, backup_folder))
+            return
+        self._release_welcome_checked = True
+        last_version = self.load_user_settings().get("last_started_release")
+        current = release_key(APP_VERSION_STR)
+        last_key = release_key(last_version)
+        previous = updated_from if release_key(updated_from) is not None else last_version
+        previous_key = release_key(previous)
+        if current is None or (last_key is not None and last_key >= current):
+            return
+        self.save_user_settings("last_started_release", APP_VERSION_STR)
+        if previous_key is None or previous_key >= current:
+            return
+        self.show_update_success(str(previous).lstrip("vV"), backup_folder)
+
     def check_for_updates(self):
         """Open the Update Center to browse, install, or restore releases."""
         logging.info("--- UPDATER: Opening Update Center ---")
@@ -274,7 +350,11 @@ class UpdaterMixin:
             webbrowser.open(entry.html_url)
             return
 
-        theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
+        from steempeg.ui import ui_theme as ut
+
+        theme = ut.chrome_colors_for_active()
+        if ut.get_ui_theme() == ut.UI_THEME_DEFAULT:
+            theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
         dlg = UpdateConfirmDialog(
             entry.version_str,
             parent=self.ui,
@@ -360,45 +440,53 @@ class UpdaterMixin:
         self.restore_local_backup(backup.folder_name)
 
     def show_update_success(self, old_version, backup_folder):
-        """Shows a nice window after a successful update."""
-        text = (
-            f"<h3>Steempeg is updated!</h3>"
-            f"<p>Successfully updated from <b>v{old_version}</b> to the latest version.</p>"
+        """Show highlights for the installed release and offer access to its backup."""
+        from PySide6.QtWidgets import QHBoxLayout
+        from steempeg.services.release_catalog import CHANGELOG_RELEASES_URL, REPO, load_releases_cache
+        from steempeg.services.release_notices import release_key
+        from steempeg.ui.release_communication import (
+            WhatsNewDialog, release_button, request_release_json,
         )
-        has_backup = bool(backup_folder and backup_folder != "None")
-        if has_backup:
-            text += (
-                f"<p>Your old version was saved in the folder:<br><code>{backup_folder}</code></p>"
-                "<p><small>Import rendered videos / Screenshots / cache from that backup, "
-                "or restore the whole build via <b>Update Center</b>.</small></p>"
-            )
 
-        if has_backup:
-            buttons = (
-                DialogButton("Import from previous build", "secondary", accept=True),
-                DialogButton("📂 Open Backup Folder", "secondary", accept=True),
-                DialogButton("Good!", "primary", accept=True),
-            )
+        version = release_key(APP_VERSION_STR)
+        entry = next((
+            entry for entry in (load_releases_cache() or [])
+            if release_key(entry.version_str) == version
+        ), None)
+        url = f"https://github.com/{REPO}/releases/tag/v{APP_VERSION_STR}"
+        dialog = WhatsNewDialog(APP_VERSION_STR, old_version, url, self.ui)
+        if entry is not None and entry.body.strip():
+            dialog.set_notes(entry.body)
         else:
-            buttons = (DialogButton("Good!", "primary", accept=True),)
+            def find_notes(payload):
+                rows = payload.get("releases") if isinstance(payload, dict) else payload
+                if not isinstance(rows, list):
+                    return
+                for row in rows:
+                    if not isinstance(row, dict) or row.get("draft"):
+                        continue
+                    if release_key(row.get("tag_name")) == version and isinstance(row.get("body"), str):
+                        dialog.set_notes(row["body"])
+                        break
 
-        clicked = steempeg_alert_actions(
-            self.ui,
-            "Update Successful!",
-            text,
-            buttons,
-            rich_text=True,
-            min_width=460,
-        )
+            request_release_json(dialog, CHANGELOG_RELEASES_URL, find_notes, limit=4 * 1024 * 1024)
 
-        if not has_backup:
-            return
+        backup_path = None
+        if backup_folder and backup_folder != "None":
+            backup_path = os.path.abspath(os.path.join(get_save_directory(), backup_folder))
+        if backup_path and os.path.isdir(backup_path):
+            actions = QHBoxLayout()
 
-        backup_path = os.path.abspath(os.path.join(get_save_directory(), backup_folder))
-        if clicked == 0:
-            self._import_user_data_from_backup_path(backup_path, backup_folder)
-        elif clicked == 1 and os.path.exists(backup_path):
-            open_path_with_default_app(backup_path)
+            def import_backup():
+                dialog.accept()
+                self._import_user_data_from_backup_path(backup_path, backup_folder)
+
+            release_button(actions, "Import from backup", import_backup)
+            release_button(actions, "Open backup folder", lambda: open_path_with_default_app(backup_path))
+            actions.addStretch()
+            dialog.content_layout.insertLayout(dialog.content_layout.count() - 1, actions)
+        dialog.exec()
+        dialog.deleteLater()
 
     def _import_user_data_from_backup_path(
         self, backup_path: str, backup_label: str = ""

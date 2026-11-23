@@ -768,6 +768,17 @@ class SteempegTitleBar(QWidget):
 
         root.addStretch(1)
 
+        from steempeg.ui.settings_layouts import stroke_svg_icon
+
+        self.btn_release_notices = _shell_icon_btn(
+            "TitleBarReleaseNotices",
+            stroke_svg_icon("settings_tab_notifications.svg", "#cccccc", _icon_px),
+            "Announcements",
+        )
+        self.btn_release_notices.setAccessibleName("Announcements")
+        root.addWidget(self.btn_release_notices, 0, Qt.AlignmentFlag.AlignVCenter)
+        root.addSpacing(4)
+
         # Tip jar + Dev, then the same thin stick as next to (i), then traffic lights.
         self._kofi_icon_idle, self._kofi_icon_hot = title_bar_kofi_icons(_icon_px)
         self.btn_title_kofi = _shell_icon_btn(

@@ -7301,13 +7301,11 @@ def main():
             if args.updated_from:
                 QTimer.singleShot(800, lambda: _force_native_window_icon(window.ui, icon_path))
 
-                def _post_update_ui():
-                    _ensure_max(window.ui)
-                    window.show_update_success(args.updated_from, args.backup_folder)
-                    _ensure_max(window.ui)
+            QTimer.singleShot(
+                1000, lambda: window.show_first_launch_release_notes(args.updated_from, args.backup_folder)
+            )
 
-                QTimer.singleShot(1000, _post_update_ui)
-
+        window.start_release_notices()
         if args.background and window._tray.keeps_running_on_close():
             window._tray.set_first_reveal(_reveal_main_window)
             window._startup_measurement.tray_started()
