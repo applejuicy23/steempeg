@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+from threading import Lock
 
 import psutil
 
@@ -80,6 +81,8 @@ class RenderThread(QThread):
         self.is_cancelled = False
         self.is_paused = False
         self.current_process = None
+        self._process_lock = Lock()
+        self._can_pause_process = False
 
     @staticmethod
     def _parse_ffmpeg_time_hms(line: str) -> float | None:
@@ -96,6 +99,10 @@ class RenderThread(QThread):
             return None
         h, m, s = float(match.group(1)), float(match.group(2)), float(match.group(3))
         return h * 3600 + m * 60 + s
+
+    def _report_part_progress(self, part_index: int, part_count: int, percent: float) -> None:
+        label = f"Rendering (Part {part_index + 1}/{part_count})" if part_count > 1 else "Rendering"
+        self.progress_signal.emit(f"{label} ({percent:.1f}%)")
 
     def _emit_part_progress(
         self,
@@ -116,9 +123,59 @@ class RenderThread(QThread):
         if last_pct and abs(overall - last_pct[0]) < 0.4:
             return
         last_pct[:] = [overall]
-        self.progress_signal.emit(
-            f"Part {part_index + 1}/{part_count}.. ({overall:.1f}%)"
+        self._report_part_progress(part_index, part_count, overall)
+
+    def _start_ffmpeg(
+        self, cmd: str, *, cwd: str, creation_flags: int, can_pause: bool = False
+    ) -> subprocess.Popen:
+        self._check_cancelled()
+        process = _popen_cmdline(
+            cmd,
+            cwd=cwd,
+            creation_flags=creation_flags,
+            priority=self.process_priority,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            encoding="utf-8",
+            errors="ignore",
         )
+        with self._process_lock:
+            self.current_process = process
+            cancelled = self.is_cancelled
+            self._can_pause_process = can_pause and not cancelled
+        # Cancel may have arrived while Windows was creating the process.
+        if cancelled:
+            self._kill_ffmpeg(process)
+        return process
+
+    def _wait_ffmpeg(self, process: subprocess.Popen) -> None:
+        with self._process_lock:
+            self._can_pause_process = False
+        try:
+            process.wait()
+        finally:
+            with self._process_lock:
+                self.current_process = None
+                self.is_paused = False
+
+    def _check_cancelled(self) -> None:
+        if self.is_cancelled:
+            raise RuntimeError("Render cancelled by user.")
+
+    @staticmethod
+    def _kill_ffmpeg(process: subprocess.Popen) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            # Use the existing process handle, including for a suspended child.
+            process.kill()
+        except OSError:
+            if process.poll() is None:
+                logging.warning("Direct FFmpeg termination failed for PID %s", process.pid, exc_info=True)
+                from steempeg.infra.process import kill_process_tree
+
+                kill_process_tree(process, label="ffmpeg")
 
     def _run_part_command(
         self,
@@ -133,27 +190,24 @@ class RenderThread(QThread):
     ) -> None:
         """Run one ffmpeg invocation for a part; raise on cancel / failure."""
         logging.debug(f"FFmpeg cmd for part {part_index} ({step + 1}/{steps}): {cmd}")
-        self.current_process = _popen_cmdline(
-            cmd,
-            cwd=cwd,
-            creation_flags=creation_flags,
-            priority=self.process_priority,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            encoding="utf-8",
-            errors="ignore",
+        process = self._start_ffmpeg(
+            cmd, cwd=cwd, creation_flags=creation_flags, can_pause=True
         )
 
         progress_duration = expected_duration
         last_ffmpeg_output = []
         last_emitted_pct: list[float] = []
 
-        for line in self.current_process.stdout:
+        for line in process.stdout:
             if self.is_cancelled:
                 break
 
             clean_line = line.strip()
+            if "Lsize=" in clean_line:
+                # FFmpeg wrote its trailer and is exiting. Keep Pause from
+                # suspending the last thread before the process can signal exit.
+                with self._process_lock:
+                    self._can_pause_process = False
             if clean_line:
                 logging.debug(f"[FFmpeg] {clean_line}")
                 last_ffmpeg_output.append(clean_line)
@@ -169,7 +223,14 @@ class RenderThread(QThread):
                     progress_duration = min(progress_duration, parsed_dur)
 
             current_time = self._parse_ffmpeg_time_hms(line)
-            if current_time is not None and progress_duration > 0:
+            if current_time is None:
+                continue
+            if progress_duration <= 0:
+                if not last_emitted_pct:
+                    percent = (part_index + step / steps) * 100.0 / len(self.mpd_paths)
+                    last_emitted_pct.append(percent)
+                    self._report_part_progress(part_index, len(self.mpd_paths), percent)
+            else:
                 self._emit_part_progress(
                     part_index,
                     len(self.mpd_paths),
@@ -180,12 +241,10 @@ class RenderThread(QThread):
                     steps,
                 )
 
-        self.current_process.wait()
+        self._wait_ffmpeg(process)
+        self._check_cancelled()
 
-        if self.is_cancelled:
-            raise Exception("Render cancelled by user.")
-
-        if self.current_process.returncode != 0:
+        if process.returncode != 0:
             error_details = "\n".join(last_ffmpeg_output)
             logging.error(f"FFmpeg ERROR in part {part_index}:\n{error_details}")
             raise Exception(
@@ -288,15 +347,18 @@ class RenderThread(QThread):
         )
 
     def cancel(self):
-        """ Force kills the FFmpeg process. """
-        self.is_cancelled = True
-        if self.current_process:
-            try:
-                from steempeg.infra.process import kill_process_tree
-
-                kill_process_tree(self.current_process, label="ffmpeg")
-            except Exception:
-                pass
+        """Record cancellation before touching the current FFmpeg process."""
+        with self._process_lock:
+            self.is_cancelled = True
+            self._can_pause_process = False
+            process = self.current_process
+            if process is not None and self.is_paused and process.poll() is None:
+                try:
+                    psutil.Process(process.pid).resume()
+                except psutil.Error:
+                    logging.debug("Could not resume FFmpeg PID %s before terminating it", process.pid)
+        if process is not None:
+            self._kill_ffmpeg(process)
 
     def _remove_partial_output(self):
         """Deletes the half-written output file left by a killed finalize step."""
@@ -307,24 +369,29 @@ class RenderThread(QThread):
             logging.warning("Could not remove partial output %s: %s", self.output_file, exc)
 
     def toggle_pause(self):
-        """ Pauses or resumes FFmpeg at the OS level. """
-        if not self.current_process:
-            return False
-            
-        self.is_paused = not self.is_paused
-        try:
-            p = psutil.Process(self.current_process.pid)
-            if self.is_paused: p.suspend()
-            else: p.resume() 
-        except:
-            self.is_paused = not self.is_paused
-            
-        return self.is_paused
+        """Pause or resume the current encode, while it still accepts Pause."""
+        with self._process_lock:
+            process = self.current_process
+            if self.is_cancelled or process is None or process.poll() is not None:
+                return self.is_paused
+            if not self.is_paused and not self._can_pause_process:
+                return False
+
+            paused = not self.is_paused
+            try:
+                target = psutil.Process(process.pid)
+                if paused:
+                    target.suspend()
+                else:
+                    target.resume()
+            except psutil.Error:
+                return self.is_paused
+            self.is_paused = paused
+            return paused
 
     def run(self):
         """ Main thread loop """
         if os.environ.get("STEEMPEG_DEBUG_RENDER_FAIL"):
-            self.progress_signal.emit("Part 1/1.. (0%)")
             self.finished_signal.emit(
                 False,
                 "DEBUG: Simulated FFmpeg crash (STEEMPEG_DEBUG_RENDER_FAIL=1).\n"
@@ -353,8 +420,6 @@ class RenderThread(QThread):
                 # Use the correct extension for temporary files
                 temp_mp4 = os.path.join(self.save_dir, f"temp_steempeg_part_{idx}{ext}")
                 temp_files.append(temp_mp4)
-                
-                self.progress_signal.emit(f"Part {idx+1}/{len(self.mpd_paths)}.. (0%)")
                 
                 # Fix paths for FFmpeg (replace backslashes with forward slashes)
                 safe_mpd = mpd.replace('\\', '/')
@@ -510,9 +575,8 @@ class RenderThread(QThread):
                         steps=len(runs),
                     )
 
-                self.progress_signal.emit(
-                    f"Part {idx + 1}/{len(self.mpd_paths)}.. (100%)"
-                )
+                part_count = len(self.mpd_paths)
+                self._report_part_progress(idx, part_count, (idx + 1) * 100.0 / part_count)
 
             # Final check before gluing
             if self.is_cancelled:
@@ -540,18 +604,9 @@ class RenderThread(QThread):
                         f"-avoid_negative_ts make_zero -fflags +genpts "
                         f'-y "{safe_out}"'
                     )
-                    remux = _popen_cmdline(
-                        remux_cmd,
-                        cwd=self.save_dir,
-                        creation_flags=creation_flags,
-                        priority=self.process_priority,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        universal_newlines=True,
-                        encoding="utf-8",
-                        errors="ignore",
+                    remux = self._start_ffmpeg(
+                        remux_cmd, cwd=self.save_dir, creation_flags=creation_flags
                     )
-                    self.current_process = remux
                     remux_tail = []
                     for line in remux.stdout:
                         clean = line.strip()
@@ -560,7 +615,7 @@ class RenderThread(QThread):
                             remux_tail.append(clean)
                             if len(remux_tail) > 5:
                                 remux_tail.pop(0)
-                    remux.wait()
+                    self._wait_ffmpeg(remux)
                     if self.is_cancelled:
                         self._remove_partial_output()
                         raise Exception("Render cancelled by user.")
@@ -579,6 +634,9 @@ class RenderThread(QThread):
                     # Directly move/rename the perfectly rendered temp file to the final destination!
                     shutil.move(temp_files[0], self.output_file)
 
+                if self.is_cancelled:
+                    self._remove_partial_output()
+                    self._check_cancelled()
                 self.finished_signal.emit(True, "", self.output_file)
             else:
                 self.progress_signal.emit("Merging all parts...")
@@ -593,18 +651,11 @@ class RenderThread(QThread):
                         f.write(f"file '{safe_path}'\n")
 
                 # Run the merge without compression (-c copy)
-                merge = _popen_cmdline(
+                merge = self._start_ffmpeg(
                     f'"{self.ffmpeg_exe}" -f concat -safe 0 -i "{concat_file}" -c copy -y "{self.output_file}"',
                     cwd=self.save_dir,
                     creation_flags=creation_flags,
-                    priority=self.process_priority,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    universal_newlines=True,
-                    encoding="utf-8",
-                    errors="ignore",
                 )
-                self.current_process = merge
                 # The pipe must be drained, or ffmpeg blocks once it fills up.
                 merge_tail = []
                 for line in merge.stdout:
@@ -614,7 +665,7 @@ class RenderThread(QThread):
                         merge_tail.append(clean)
                         if len(merge_tail) > 5:
                             merge_tail.pop(0)
-                merge.wait()
+                self._wait_ffmpeg(merge)
 
                 if self.is_cancelled:
                     self._remove_partial_output()
