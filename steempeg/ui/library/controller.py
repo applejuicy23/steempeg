@@ -478,9 +478,6 @@ class LibraryMixin:
         safe_disconnect(btn.menu_btn.clicked)
 
         def _show_menu():
-            from steempeg.ui.icon_assets import title_bar_update_pixmap
-            from steempeg.ui.pro_appearance import accent_color, pro_accents_enabled
-
             menu = QMenu(self.ui)
             ut.set_stylesheet_if_changed(menu, ut.context_menu_stylesheet())
             mode = getattr(self, "_library_panel_mode", "clips")
@@ -495,11 +492,7 @@ class LibraryMixin:
                 section_label = "🔄  Refresh Clips Manager"
                 section_tip = "Rescan Clips Manager folders only."
 
-            if pro_accents_enabled():
-                glyph = QIcon(title_bar_update_pixmap(accent_color("#b29ae7"), 14))
-                action_section = menu.addAction(glyph, section_label.removeprefix("🔄  "))
-            else:
-                action_section = menu.addAction(section_label)
+            action_section = menu.addAction(section_label)
             action_section.setToolTip(section_tip)
             action_section.triggered.connect(self.refresh_active_library_section)
 
@@ -4068,8 +4061,6 @@ class LibraryMixin:
 
     def show_folders_panel(self):
         """Dropdown panel (styled like Logs) listing the main + extra library folders."""
-        from steempeg.ui.icon_assets import folder_glyph, tinted_icon
-        from steempeg.ui.pro_appearance import accent_color, pro_accents_enabled
         from steempeg.ui.widgets.folder_picker_button import FolderScanHeader
 
         menu = QMenu(self.folder_picker)
@@ -4088,14 +4079,9 @@ class LibraryMixin:
         menu.addSeparator()
         action_discover = menu.addAction("🔍  Discover Steam folders…")
         action_discover.triggered.connect(self.discover_steam_folders)
-        add_label = "Add another folder…" if self.clips_folders else "Choose folder manually…"
-        if pro_accents_enabled():
-            tint = accent_color("#b29ae7")
-            add_icon = tinted_icon("plus.png", tint) if self.clips_folders else QIcon(folder_glyph(tint))
-            action_add = menu.addAction(add_icon, add_label)
-        else:
-            add_emoji = "➕" if self.clips_folders else "📂"
-            action_add = menu.addAction(f"{add_emoji}  {add_label}")
+        action_add = menu.addAction(
+            "➕  Add another folder…" if self.clips_folders else "📂  Choose folder manually…"
+        )
         action_add.triggered.connect(self.add_clips_folder if self.clips_folders else self.choose_folder)
         controls.extend((action_discover, action_add))
 

@@ -305,9 +305,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 tray_icon.setIcon(icon)
         if accents_changed:
             self._refresh_playback_artwork()
-            for button in (getattr(self, "folder_picker", None), getattr(self, "btn_refresh", None)):
-                if button is not None:
-                    button.refresh_accent_icon()
             queue = getattr(self, "render_queue_panel", None)
             for chrome in (getattr(self, "card_size_chrome", None), getattr(queue, "_view_chrome", None)):
                 if chrome is not None:
