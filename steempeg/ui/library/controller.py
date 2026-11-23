@@ -5726,7 +5726,6 @@ class LibraryMixin:
         snapshot_restore = bool(getattr(self, "_scan_snapshot_restore", False))
         if not snapshot_restore:
             LibraryMixin.apply_sorting(self)
-            self.sync_grid_from_table_selection()
         else:
             if hasattr(self, "fast_sync_grid"):
                 self.fast_sync_grid()
@@ -7369,11 +7368,14 @@ class LibraryMixin:
         if not hasattr(self.ui, 'table_clips'): return
         table = self.ui.table_clips
         sort_idx = self.combo_sort.currentIndex()
-        
-        
+        selected_keys = self._table_selected_clip_keys()
+        current_cell = table.item(table.currentRow(), 0)
+        current_key = self._clip_key(current_cell.data(Qt.UserRole)) if current_cell else ""
+        current_column = table.currentColumn()
+
         # Freezing graphics and signals for instant speed
         table.setUpdatesEnabled(False)
-        table.blockSignals(True)
+        was_blocked = table.blockSignals(True)
         # Qt's built-in table sort MUST stay off. With setSortingEnabled(True),
         # every setItem re-sorts by the header (game name) and setRowHidden
         # sticks to row indexes — Clear then looks like «old filter block,
@@ -7449,10 +7451,30 @@ class LibraryMixin:
         else:
             all_data.sort(key=get_sort_key, reverse=reverse)
         
+        selection = QItemSelection()
+        current_row = -1
+        model = table.model()
+        last_column = table.columnCount() - 1
         for new_row, data in enumerate(all_data):
             for col, item in enumerate(data['table_items']):
                 table.setItem(new_row, col, item)
             table.setRowHidden(new_row, data['hidden'])
+            title = table.item(new_row, 0)
+            key = self._clip_key(title.data(Qt.UserRole)) if title else ""
+            if key in selected_keys:
+                selection.select(model.index(new_row, 0), model.index(new_row, last_column))
+            if key and key == current_key:
+                current_row = new_row
+
+        # The table keeps selection indexes when rows are repopulated in place.
+        # Restore by clip path before syncing the grid, without opening a preview.
+        selection_model = table.selectionModel()
+        selection_model.select(selection, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        if current_row >= 0:
+            selection_model.setCurrentIndex(
+                model.index(current_row, current_column),
+                QItemSelectionModel.SelectionFlag.NoUpdate,
+            )
 
         # Keep session snapshot rows aligned with the visible table order.
         rows = getattr(self, "_library_clip_rows", None)
@@ -7477,7 +7499,7 @@ class LibraryMixin:
                     seen.add(key)
             self._library_clip_rows = ordered
             
-        table.blockSignals(False)
+        table.blockSignals(was_blocked)
         table.setUpdatesEnabled(True)
         # Keep auto-sort off after reorder (re-enable would wipe Default immediately).
         table.setSortingEnabled(False)
@@ -7487,6 +7509,7 @@ class LibraryMixin:
             self.fast_sync_grid()
         if hasattr(self, "_sync_progressive_grid_filter_visibility"):
             self._sync_progressive_grid_filter_visibility()
+        self.sync_grid_from_table_selection()
 
     
 
