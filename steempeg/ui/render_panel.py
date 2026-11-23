@@ -695,14 +695,20 @@ def _custom_field(ui, label, combo, input_attr, warn_attr, unit):
 
 
 def _toggle_row(toggle, text):
+    row, _ = _toggle_row_with_caption(toggle, text, _TOGGLE_LABEL_QSS)
+    return row
+
+
+def _toggle_row_with_caption(toggle, text, stylesheet):
     row = QHBoxLayout()
     row.setSpacing(10)
     row.addWidget(toggle)
     caption = QLabel(text)
-    caption.setStyleSheet(_TOGGLE_LABEL_QSS)
+    caption.setFont(tok.ui_qfont(pixel_size=12, weight=QFont.Weight.Bold))
+    caption.setStyleSheet(stylesheet)
     row.addWidget(caption)
     row.addStretch()
-    return row
+    return row, caption
 
 
 def _stat_block(caption, value_label):
@@ -794,14 +800,7 @@ _PRO_FIELD_LABEL_QSS = (
 
 
 def _pro_toggle_row(toggle: ToggleSwitch, text: str) -> tuple[QHBoxLayout, QLabel]:
-    row = QHBoxLayout()
-    row.setSpacing(10)
-    row.addWidget(toggle)
-    caption = QLabel(text)
-    caption.setStyleSheet(_PRO_CAPTION_QSS)
-    row.addWidget(caption)
-    row.addStretch()
-    return row, caption
+    return _toggle_row_with_caption(toggle, text, _PRO_CAPTION_QSS)
 
 
 def _build_pro_encoding_section(ui) -> QWidget:

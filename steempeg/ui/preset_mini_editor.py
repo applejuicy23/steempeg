@@ -380,11 +380,11 @@ class PresetMiniEditor(SteempegDialog):
         # --- Audio ---
         root.addWidget(_section_title("Audio", 2))
 
-        from steempeg.ui.render_panel import _toggle_row
+        from steempeg.ui.render_panel import _pro_toggle_row, _toggle_row
 
         self._mute = ToggleSwitch()
-        self._mute.setAccessibleName("Disable audio (video only)")
-        root.addLayout(_toggle_row(self._mute, "Disable audio (video only)"))
+        self._mute.setAccessibleName("Disable Audio (Video Only)")
+        root.addLayout(_toggle_row(self._mute, "Disable Audio (Video Only)"))
 
         self._audio_fmt = QComboBox()
         for fmt in AUDIO_FORMATS:
@@ -460,7 +460,8 @@ class PresetMiniEditor(SteempegDialog):
             adv.setColumnStretch(0, 1)
             adv.setColumnStretch(1, 1)
             root.addLayout(adv)
-            root.addLayout(_toggle_row(self._pro_ten_bit, "10-bit color"))
+            row, _ = _pro_toggle_row(self._pro_ten_bit, "10-bit color")
+            root.addLayout(row)
 
         _apply_settings_combo_chrome(
             self._quality,
