@@ -770,22 +770,22 @@ class SteempegTitleBar(QWidget):
 
         from steempeg.ui.settings_layouts import stroke_svg_icon
 
+        title_actions = QHBoxLayout()
+        title_actions.setSpacing(4)
+        self._kofi_icon_idle, self._kofi_icon_hot = title_bar_kofi_icons(_icon_px)
+        self.btn_title_kofi = _shell_icon_btn(
+            "TitleBarKofi", self._kofi_icon_idle, "Support on Ko-fi"
+        )
+        self.btn_title_kofi.clicked.connect(self.kofi_requested.emit)
+        title_actions.addWidget(self.btn_title_kofi, 0, Qt.AlignmentFlag.AlignVCenter)
+
         self.btn_release_notices = _shell_icon_btn(
             "TitleBarReleaseNotices",
             stroke_svg_icon("settings_tab_notifications.svg", "#cccccc", _icon_px),
             "Announcements",
         )
         self.btn_release_notices.setAccessibleName("Announcements")
-        root.addWidget(self.btn_release_notices, 0, Qt.AlignmentFlag.AlignVCenter)
-        root.addSpacing(4)
-
-        # Tip jar + Dev, then the same thin stick as next to (i), then traffic lights.
-        self._kofi_icon_idle, self._kofi_icon_hot = title_bar_kofi_icons(_icon_px)
-        self.btn_title_kofi = _shell_icon_btn(
-            "TitleBarKofi", self._kofi_icon_idle, "Support on Ko-fi"
-        )
-        self.btn_title_kofi.clicked.connect(self.kofi_requested.emit)
-        root.addWidget(self.btn_title_kofi, 0, Qt.AlignmentFlag.AlignVCenter)
+        title_actions.addWidget(self.btn_release_notices, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self._dev_icon_idle, self._dev_icon_hot = title_bar_dev_icons(_icon_px)
         self.btn_title_dev = _shell_icon_btn(
@@ -793,8 +793,8 @@ class SteempegTitleBar(QWidget):
         )
         self.btn_title_dev.clicked.connect(self.dev_requested.emit)
         self.btn_title_dev.hide()
-        root.addSpacing(4)
-        root.addWidget(self.btn_title_dev, 0, Qt.AlignmentFlag.AlignVCenter)
+        title_actions.addWidget(self.btn_title_dev, 0, Qt.AlignmentFlag.AlignVCenter)
+        root.addLayout(title_actions)
 
         traffic_divider = QFrame()
         traffic_divider.setObjectName("TitleBarShellDivider")
