@@ -5,11 +5,16 @@ import math
 from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QStyle, QStyledItemDelegate,
-                              QStyleOptionViewItem, QVBoxLayout, QWidget)
+                              QStyleOptionComboBox, QStyleOptionViewItem, QVBoxLayout, QWidget)
 from steempeg.ui.pro_appearance import accent_qcolor
 
 from steempeg.ui import design_tokens as tok
-from steempeg.ui.widgets.clip_card_style_guide import ClipCardStyleCombo, _ClipCardStylePopupGuide
+from steempeg.ui.widgets.clip_card_style_guide import ClipCardStyleCombo, _BLURB_W, _ClipCardStylePopupGuide
+from steempeg.ui.widgets.splash_layout import fit_splash_layout
+
+_GAUGE_WIDTH = 30
+_GAUGE_HEIGHT = 22
+_TITLE_GAP = 6
 
 STARTUP_HELP = (
     "Choose how Steempeg checks and prepares your library when it starts. "
@@ -68,7 +73,7 @@ def paint_speed_gauge(painter: QPainter, rect: QRectF, level: int) -> None:
 class StartupSpeedGauge(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(30, 22)
+        self.setFixedSize(_GAUGE_WIDTH, _GAUGE_HEIGHT)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._mode = "progressive"
 
@@ -100,7 +105,10 @@ class StartupModeDetails(QWidget):
         self.title.setFont(font)
         self.title.setStyleSheet("color: #eeeeee;")
         self.gauge = StartupSpeedGauge()
-        row.addWidget(mark); row.addWidget(self.title); row.addWidget(self.gauge); row.addStretch(1)
+        row.addWidget(self.title)
+        row.addWidget(self.gauge)
+        row.addWidget(mark)
+        row.addStretch(1)
         layout.addLayout(row)
         self.description = QLabel()
         self.description.setWordWrap(True)
@@ -122,19 +130,27 @@ class _StartupChoiceDelegate(QStyledItemDelegate):
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
         name = opt.text
-        opt.text = ""
         widget = option.widget or self.combo.view()
-        widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, widget)
+        style = widget.style()
+        text_rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, opt, widget)
+        # Match the inset the standard Settings combo uses when drawing its text.
+        text_margin = style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin, opt, widget) + 1
+        left = text_rect.left() + text_margin
+        opt.text = ""
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, widget)
         painter.save(); painter.setFont(opt.font); painter.setPen(QColor("#eeeeee"))
         rect = option.rect
+        text_width = painter.fontMetrics().horizontalAdvance(name)
+        painter.drawText(QRectF(left, rect.top(), text_width + 1, rect.height()),
+                         Qt.AlignmentFlag.AlignVCenter, name)
+        gauge_rect = QRectF(left + text_width + _TITLE_GAP, rect.center().y() - _GAUGE_HEIGHT / 2,
+                            _GAUGE_WIDTH, _GAUGE_HEIGHT)
+        mode = str(index.data(Qt.ItemDataRole.UserRole) or "")
+        paint_speed_gauge(painter, gauge_rect, MODES.get(mode, MODES["progressive"])[1])
         if index.row() == self.combo.currentIndex():
             from steempeg.ui.icon_assets import tinted_pixmap
-            painter.drawPixmap(rect.left() + 10, rect.center().y() - 8,
+            painter.drawPixmap(int(gauge_rect.right()) + _TITLE_GAP, rect.center().y() - 8,
                                tinted_pixmap("success.png", "#ffffff", 16))
-        painter.drawText(rect.adjusted(34, 0, -44, 0), Qt.AlignmentFlag.AlignVCenter, name)
-        mode = str(index.data(Qt.ItemDataRole.UserRole) or "")
-        paint_speed_gauge(painter, QRectF(rect.right() - 36, rect.center().y() - 11, 30, 22),
-                          MODES.get(mode, MODES["progressive"])[1])
         painter.restore()
 
     def sizeHint(self, option, index):  # noqa: N802
@@ -148,15 +164,26 @@ class _StartupPopupGuide(_ClipCardStylePopupGuide):
         empty.hide(); empty.setFixedSize(1, 0)
         super().__init__(parent, empty, startup_copy)
         self._gauge = StartupSpeedGauge(self)
-        self.layout().itemAt(0).layout().addWidget(self._gauge)
+        self._title_row = self.layout().itemAt(0).layout()
+        self._title_row.removeWidget(self._mark)
+        self._title_row.removeWidget(self._title)
+        self._title_row.addWidget(self._title)
+        self._title_row.addWidget(self._gauge)
+        self._title_row.addWidget(self._mark)
+        self._title_row.addStretch(1)
 
     def show_style(self, style, combo):
         self._gauge.set_style(style)
         super().show_style(style, combo)
 
     def _fit(self, title, blurb):
-        super()._fit(title, blurb)
-        self._title.setFixedWidth(max(1, self._title.width() - self._gauge.width() - 6))
+        self._title.setFixedWidth(self._title.fontMetrics().horizontalAdvance(title) + 2)
+        self._blurb.setVisible(bool(blurb.strip()))
+        blurb_width = min(self._blurb.fontMetrics().horizontalAdvance(blurb) + 4, _BLURB_W)
+        width = max(self._title_row.sizeHint().width(), blurb_width)
+        self._blurb.setFixedWidth(width)
+        margins = self.layout().contentsMargins()
+        fit_splash_layout(self, margins.left() + width + margins.right())
 
 
 class StartupModeCombo(ClipCardStyleCombo):
@@ -179,9 +206,17 @@ class StartupModeCombo(ClipCardStyleCombo):
 
     def paintEvent(self, event):  # noqa: N802
         super().paintEvent(event)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        if not option.currentText:
+            return
+        label = self.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox, option, QStyle.SubControl.SC_ComboBoxEditField, self
+        )
+        left = label.left() + self.fontMetrics().horizontalAdvance(option.currentText) + _TITLE_GAP + 2
         painter = QPainter(self)
         mode = str(self.currentData() or "progressive")
-        paint_speed_gauge(painter, QRectF(self.width() - 70, (self.height() - 22) / 2, 30, 22),
+        paint_speed_gauge(painter, QRectF(left, (self.height() - _GAUGE_HEIGHT) / 2, _GAUGE_WIDTH, _GAUGE_HEIGHT),
                           MODES.get(mode, MODES["progressive"])[1])
 
     def _ensure_guide(self):
