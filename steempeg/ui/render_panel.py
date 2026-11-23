@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from PySide6.QtGui import QFont, QGuiApplication, QIcon
+from shiboken6 import isValid
 
 from steempeg.ui.ui_density import COMFORT
 from steempeg.ui.icon_assets import arrow_icon, warning_icon
@@ -1213,14 +1214,15 @@ def set_settings_panel_locked(app, locked: bool):
         app._render_locked_widgets = disabled
     else:
         wheel_filter = getattr(app, '_render_wheel_filter', None)
-        for widget in getattr(app, '_render_locked_widgets', []):
+        disabled = getattr(app, '_render_locked_widgets', [])
+        app._render_locked_widgets = []
+        for widget in disabled:
+            # Clip changes can replace combo editors while rendering is paused.
+            if not isValid(widget):
+                continue
             if wheel_filter is not None:
                 widget.removeEventFilter(wheel_filter)
-            try:
-                widget.setEnabled(True)
-            except RuntimeError:
-                pass
-        app._render_locked_widgets = []
+            widget.setEnabled(True)
 
     for btn in getattr(app, 'neo_nav_buttons', []):
         btn.setEnabled(True)
