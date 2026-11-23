@@ -5,6 +5,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QComboBox, QStyledItemDelegate
 
+from steempeg.ui.pro_appearance import accent_qcolor
+
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.ui_density import COMFORT, UiDensity
 
@@ -96,7 +98,7 @@ class QualitySectionHeaderDelegate(QStyledItemDelegate):
             # Same stack as Presets section captions (Segoe UI / bold).
             font = tok.ui_qfont(11, weight=QFont.Weight.Bold)
             painter.setFont(font)
-            painter.setPen(_SECTION_FG)
+            painter.setPen(accent_qcolor(_SECTION_FG))
             pad = 8
             painter.drawText(
                 option.rect.adjusted(pad, 0, -pad, 0),

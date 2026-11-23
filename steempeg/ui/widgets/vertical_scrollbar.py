@@ -8,6 +8,8 @@ from PySide6.QtCore import Qt, QRect, QRectF
 from PySide6.QtGui import QColor, QPainter, QMouseEvent
 from PySide6.QtWidgets import QScrollBar, QWidget
 
+from steempeg.ui.pro_appearance import accent_qcolor
+
 
 @dataclass(frozen=True)
 class VerticalScrollbarChrome:
@@ -312,11 +314,8 @@ class SteempegVerticalScrollBar(QScrollBar):
         thumb = self._thumb_rect(groove)
         if thumb.width() > 0 and thumb.height() > 0:
             active = self.underMouse() or self.isSliderDown()
-            painter.setBrush(
-                self._chrome.thumb_hover_color
-                if active
-                else self._chrome.thumb_color
-            )
+            color = self._chrome.thumb_hover_color if active else self._chrome.thumb_color
+            painter.setBrush(accent_qcolor(color))
             painter.drawRoundedRect(QRectF(thumb), radius, radius)
 
         painter.end()

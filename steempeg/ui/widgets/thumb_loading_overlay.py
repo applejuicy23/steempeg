@@ -4,6 +4,8 @@ from __future__ import annotations
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QRegion
 from PySide6.QtWidgets import QWidget
+from steempeg.ui.pro_appearance import accent_qcolor
+
 
 _ACCENT = QColor("#b29ae7")
 _TRACK = QColor(178, 154, 231, 55)  # same hue, faint track
@@ -133,7 +135,7 @@ class ThumbLoadingOverlay(QWidget):
         pct = self._percent
 
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        track = QPen(_TRACK)
+        track = QPen(accent_qcolor(_TRACK))
         track.setWidth(self._pen_w)
         track.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(track)
@@ -141,13 +143,13 @@ class ThumbLoadingOverlay(QWidget):
 
         # Qt: 0° is 3 o'clock, positive span is CCW. Start at 12 o'clock, fill clockwise.
         if pct >= 100:
-            fill = QPen(_ACCENT)
+            fill = QPen(accent_qcolor(_ACCENT))
             fill.setWidth(self._pen_w)
             fill.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(fill)
             painter.drawEllipse(arc_rect)
         elif pct > 0:
-            fill = QPen(_ACCENT)
+            fill = QPen(accent_qcolor(_ACCENT))
             fill.setWidth(self._pen_w)
             fill.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(fill)

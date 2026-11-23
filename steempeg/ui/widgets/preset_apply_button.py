@@ -6,6 +6,8 @@ import weakref
 from PySide6.QtCore import QPointF, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QPushButton
+from steempeg.ui.pro_appearance import accent_qcolor
+
 
 
 def _check_icon() -> QIcon:
@@ -13,7 +15,7 @@ def _check_icon() -> QIcon:
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(QPen(QColor("#b29ae7"), 4, Qt.PenStyle.SolidLine,
+    painter.setPen(QPen(accent_qcolor(QColor("#b29ae7")), 4, Qt.PenStyle.SolidLine,
                         Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
     painter.drawPolyline(QPolygonF([QPointF(8, 18), QPointF(15, 25), QPointF(28, 11)]))
     painter.end()

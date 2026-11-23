@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from steempeg.infra import logging as log_util
 from steempeg.infra import paths
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui.pro_appearance import themed_asset_path
 from steempeg.version import APP_VERSION_STR
 from steempeg.ui.message_dialog import steempeg_information, steempeg_question, steempeg_warning
 
@@ -963,7 +964,7 @@ class LifecycleMixin:
         # --- Centered brand ---
         logo_row = QHBoxLayout()
         logo_row.addStretch(1)
-        logo_normal = _crisp_icon(get_resource_path("logo.png"), 110, dpr=1.0)
+        logo_normal = _crisp_icon(themed_asset_path("logo.png"), 110, dpr=1.0)
         logo_egg = _crisp_icon(get_resource_path("phibechipeegg.png"), 110, dpr=1.0)
         logo_label = _AboutEggLogo(logo_normal, logo_egg)
         logo_row.addWidget(logo_label)

@@ -3,6 +3,8 @@ from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
+from steempeg.ui.pro_appearance import accent_qcolor
+
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.timeline_strip_size import metrics_for, normalize_timeline_strip_size
 from steempeg.ui.widgets.clip_card_style_guide import ClipCardStyleCombo
@@ -64,7 +66,7 @@ class TimelineStripDiagram(QWidget):
         width = right - left
         track_h = round(self._metrics.track_h * self._SCALE)
         painter.fillRect(QRectF(left, top, width, track_h), QColor("#49434f"))
-        painter.fillRect(QRectF(left, top, width * 0.62, track_h), QColor("#b29ae7"))
+        painter.fillRect(QRectF(left, top, width * 0.62, track_h), accent_qcolor(QColor("#b29ae7")))
         # Pins stay the same size for every ruler setting.
         for fraction in ((0.18, 0.48, 0.79) if self._marker_mode else (0.21, 0.69)):
             x = left + width * fraction

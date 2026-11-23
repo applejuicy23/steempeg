@@ -242,9 +242,9 @@ def _ensure_startup_settle_veil(app) -> None:
     logo = QLabel(veil)
     logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
     try:
-        from steempeg.infra.paths import get_resource_path
+        from steempeg.ui.pro_appearance import themed_asset_path
 
-        pix = QPixmap(get_resource_path("logo.png"))
+        pix = QPixmap(themed_asset_path("logo.png"))
         if not pix.isNull():
             logo.setPixmap(
                 pix.scaled(

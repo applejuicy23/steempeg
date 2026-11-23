@@ -6,6 +6,8 @@ from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QStyle, QStyledItemDelegate,
                               QStyleOptionViewItem, QVBoxLayout, QWidget)
+from steempeg.ui.pro_appearance import accent_qcolor
+
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.widgets.clip_card_style_guide import ClipCardStyleCombo, _ClipCardStylePopupGuide
 
@@ -50,7 +52,7 @@ def paint_speed_gauge(painter: QPainter, rect: QRectF, level: int) -> None:
     center.setY(rect.bottom() - 3)
     arc = QRectF(center.x() - radius, center.y() - radius, radius * 2, radius * 2)
     for segment in range(4):
-        pen = QPen(QColor("#b29ae7" if segment < level else "#55515d"), 3)
+        pen = QPen(accent_qcolor(QColor("#b29ae7" if segment < level else "#55515d")), 3)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
         painter.drawArc(arc, int((177 - segment * 45) * 16), -37 * 16)

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from steempeg.ui.widgets import FlowLayout
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui.pro_appearance import themed_asset_path
 from steempeg.ui.icon_assets import (
     info_icon,
     load_icon,
@@ -270,7 +271,7 @@ def _logo_pixmap(size: int = 18) -> QPixmap | None:
 
     pix = app_logo_pixmap(size)
     if pix is None or pix.isNull():
-        path = get_resource_path("logo.png")
+        path = themed_asset_path("logo.png")
         if os.path.isfile(path):
             pix = square_fit_pixmap(QPixmap(path), size, dpr=1.0)
     if pix is not None and not pix.isNull():

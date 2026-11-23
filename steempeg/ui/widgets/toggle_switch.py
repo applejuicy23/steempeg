@@ -9,6 +9,8 @@ from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, QRectF, Q
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QCheckBox
 
+from steempeg.ui.pro_appearance import accent_qcolor
+
 
 class ToggleSwitch(QCheckBox):
     def __init__(self, parent=None, track_on="#b29ae7", track_off="#444444", thumb="#ffffff"):
@@ -67,7 +69,7 @@ class ToggleSwitch(QCheckBox):
             self._offset = self._on_pos() if self.isChecked() else self._off_pos()
 
         radius = self._h / 2.0
-        p.setBrush(self._track_on if self.isChecked() else self._track_off)
+        p.setBrush(accent_qcolor(self._track_on) if self.isChecked() else self._track_off)
         p.drawRoundedRect(QRectF(0, 0, self._w, self._h), radius, radius)
 
         diameter = self._h - 2 * self._margin

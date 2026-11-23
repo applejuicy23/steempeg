@@ -10,6 +10,8 @@ Player volume / speed (``LevelGradientSlider``):
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QLinearGradient, QPainter
 from PySide6.QtWidgets import QSlider
+from steempeg.ui.pro_appearance import accent_qcolor
+
 
 _RED = QColor("#ff4d4d")
 _ORANGE = QColor("#ff9f43")
@@ -66,7 +68,7 @@ class GradientSlider(QSlider):
             (lf * 0.34, _ORANGE),
             (lf * 0.67, _YELLOW),
             (lf, _GREEN),
-            (1.0, _PURPLE),
+            (1.0, accent_qcolor(_PURPLE)),
         ]
 
     def _color_at(self, frac):

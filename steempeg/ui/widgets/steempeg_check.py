@@ -1,6 +1,8 @@
 """Purple square checkbox with animated checkmark (Render Queue dialog style)."""
 from __future__ import annotations
 
+from steempeg.ui.pro_appearance import accent_qcolor
+
 from steempeg.ui import design_tokens as tok
 
 from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, QRectF, QSize, Qt
@@ -48,7 +50,7 @@ class SteempegCheckBox(QCheckBox):
             return QColor("#666666")
         if self._label_color_override:
             return QColor(self._label_color_override)
-        return QColor("#b29ae7" if self._accent_label else "#cccccc")
+        return accent_qcolor(QColor("#b29ae7" if self._accent_label else "#cccccc"))
 
     def _indicator_rect(self) -> QRectF:
         y = (self.height() - self._IND) / 2.0
@@ -116,7 +118,7 @@ class SteempegCheckBox(QCheckBox):
         unchecked_bg = QColor("#1a1a1a")
         checked_bg = QColor("#5138e6")
         unchecked_border = QColor("#666666")
-        checked_border = QColor("#b29ae7")
+        checked_border = accent_qcolor(QColor("#b29ae7"))
 
         def _lerp(a: QColor, b: QColor, u: float) -> QColor:
             return QColor(
