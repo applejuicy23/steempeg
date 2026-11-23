@@ -5,6 +5,8 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter
 from PySide6.QtWidgets import QPushButton, QWidget
 
+from steempeg.ui.pro_appearance import accent_qcolor
+
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui.design_tokens import ACCENT_PRIMARY
 from steempeg.ui.ui_density import COMFORT, UiDensity
@@ -37,13 +39,13 @@ class _FilterBadgeSticker(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         side = min(self.width(), self.height())
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(self._bg)
+        p.setBrush(accent_qcolor(self._bg))
         p.drawEllipse(0, 0, side - 1, side - 1)
         font = QFont("Segoe UI", self._font_px)
         font.setBold(True)
         font.setWeight(QFont.Weight.Bold)
         p.setFont(font)
-        p.setPen(self._fg)
+        p.setPen(accent_qcolor(self._fg))
         # Tight center — ExtraBold digits sit low; nudge up 1px.
         box = QRect(0, -1, side - 1, side - 1)
         p.drawText(box, int(Qt.AlignmentFlag.AlignCenter), self._text)

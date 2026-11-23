@@ -79,6 +79,7 @@ from steempeg.core.steam_paths import (
 from steempeg.infra.locale_time import format_clip_date, format_clip_time, parse_clip_datetime_text
 from steempeg.infra import cache as json_cache
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui.pro_appearance import render_status_color, themed_asset_path
 from steempeg.ui.library.filters import FilterMenu
 from steempeg.ui.library.grid_view import ClipCard
 from steempeg.ui.message_dialog import (
@@ -477,8 +478,11 @@ class LibraryMixin:
         safe_disconnect(btn.menu_btn.clicked)
 
         def _show_menu():
+            from steempeg.ui.icon_assets import title_bar_update_pixmap
+            from steempeg.ui.pro_appearance import accent_color, pro_accents_enabled
+
             menu = QMenu(self.ui)
-            menu.setStyleSheet(ut.library_menu_stylesheet())
+            ut.set_stylesheet_if_changed(menu, ut.context_menu_stylesheet())
             mode = getattr(self, "_library_panel_mode", "clips")
 
             if mode == "rendered":
@@ -491,7 +495,11 @@ class LibraryMixin:
                 section_label = "🔄  Refresh Clips Manager"
                 section_tip = "Rescan Clips Manager folders only."
 
-            action_section = menu.addAction(section_label)
+            if pro_accents_enabled():
+                glyph = QIcon(title_bar_update_pixmap(accent_color("#b29ae7"), 14))
+                action_section = menu.addAction(glyph, section_label.removeprefix("🔄  "))
+            else:
+                action_section = menu.addAction(section_label)
             action_section.setToolTip(section_tip)
             action_section.triggered.connect(self.refresh_active_library_section)
 
@@ -2907,7 +2915,7 @@ class LibraryMixin:
             return
 
         menu = QMenu(self.grid_clips)
-        menu.setStyleSheet(ut.library_menu_stylesheet())
+        ut.set_stylesheet_if_changed(menu, ut.context_menu_stylesheet())
         self._populate_library_context_menu(menu, clip_paths)
         self._run_library_context_menu(
             menu,
@@ -2947,7 +2955,7 @@ class LibraryMixin:
         # translucent frameless window made the menu a layered top-level that
         # wouldn't close on focus loss and slid behind the main window.
         menu = QMenu(self.grid_clips)
-        menu.setStyleSheet(ut.library_menu_stylesheet())
+        ut.set_stylesheet_if_changed(menu, ut.context_menu_stylesheet())
 
         self._populate_library_context_menu(menu, clip_paths)
         self._run_library_context_menu(
@@ -2967,7 +2975,7 @@ class LibraryMixin:
         # See show_grid_context_menu: keep the native Qt.Popup flags so the menu
         # closes correctly instead of lingering behind the window.
         menu = QMenu(self.ui.table_clips)
-        menu.setStyleSheet(ut.library_menu_stylesheet())
+        ut.set_stylesheet_if_changed(menu, ut.context_menu_stylesheet())
 
         self._populate_library_context_menu(menu, clip_paths)
         self._run_library_context_menu(
@@ -4060,10 +4068,12 @@ class LibraryMixin:
 
     def show_folders_panel(self):
         """Dropdown panel (styled like Logs) listing the main + extra library folders."""
+        from steempeg.ui.icon_assets import folder_glyph, tinted_icon
+        from steempeg.ui.pro_appearance import accent_color, pro_accents_enabled
         from steempeg.ui.widgets.folder_picker_button import FolderScanHeader
 
         menu = QMenu(self.folder_picker)
-        menu.setStyleSheet(ut.folders_menu_stylesheet())
+        ut.set_stylesheet_if_changed(menu, ut.folders_menu_stylesheet())
 
         header = FolderScanHeader(menu)
         header_action = QWidgetAction(menu)
@@ -4078,7 +4088,14 @@ class LibraryMixin:
         menu.addSeparator()
         action_discover = menu.addAction("🔍  Discover Steam folders…")
         action_discover.triggered.connect(self.discover_steam_folders)
-        action_add = menu.addAction("➕  Add another folder…" if self.clips_folders else "📂  Choose folder manually…")
+        add_label = "Add another folder…" if self.clips_folders else "Choose folder manually…"
+        if pro_accents_enabled():
+            tint = accent_color("#b29ae7")
+            add_icon = tinted_icon("plus.png", tint) if self.clips_folders else QIcon(folder_glyph(tint))
+            action_add = menu.addAction(add_icon, add_label)
+        else:
+            add_emoji = "➕" if self.clips_folders else "📂"
+            action_add = menu.addAction(f"{add_emoji}  {add_label}")
         action_add.triggered.connect(self.add_clips_folder if self.clips_folders else self.choose_folder)
         controls.extend((action_discover, action_add))
 
@@ -4955,10 +4972,8 @@ class LibraryMixin:
         if clip_path and hasattr(self, "render_queue") and queue_mode:
             jobs = self.render_queue.find_all_by_clip_path(clip_path)
             if jobs:
-                from steempeg.render.queue import STATUS_COLORS
-
                 queue_membership = [
-                    (int(j.queue_index), STATUS_COLORS.get(j.status, "#ffcc00"))
+                    (int(j.queue_index), render_status_color(j.status, "#ffcc00"))
                     for j in jobs
                 ]
 
@@ -5160,8 +5175,6 @@ class LibraryMixin:
         grid = getattr(self, "grid_clips", None)
         if grid is None or not hasattr(self, "render_queue"):
             return
-        from steempeg.render.queue import STATUS_COLORS
-        from steempeg.ui.library.grid_view import ClipCard
 
         # Leave keeps jobs but drops queue-mode chrome — including ClipCard circles.
         show_badges = True
@@ -5185,7 +5198,7 @@ class LibraryMixin:
             else:
                 card.set_queue_badge(
                     membership=[
-                        (int(j.queue_index), STATUS_COLORS.get(j.status, "#ffcc00"))
+                        (int(j.queue_index), render_status_color(j.status, "#ffcc00"))
                         for j in jobs
                     ]
                 )
@@ -7754,7 +7767,7 @@ class LibraryMixin:
 
         place = getattr(self, "place_logo", None)
         if place is not None and place.isVisible():
-            logo_path = get_resource_path("logo.png")
+            logo_path = themed_asset_path("logo.png")
             place_path = path
             if is_unknown and logo_path and os.path.isfile(logo_path):
                 place_path = logo_path

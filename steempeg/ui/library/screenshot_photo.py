@@ -27,6 +27,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QLabel, QWidget
 
+from steempeg.ui.pro_appearance import accent_qcolor
+
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.design_tokens import CARD_PRESS_DURATION_MS, CARD_PRESS_SCALE
@@ -478,7 +480,7 @@ class ScreenshotPhoto(QWidget):
             y = int(round(img.top() + (img.height() - target.height()) / 2))
             p.drawPixmap(x, y, target)
         if is_steempeg:
-            p.fillRect(img, _STEEMPEG_IMG_WASH)
+            p.fillRect(img, accent_qcolor(_STEEMPEG_IMG_WASH))
         # Small: game logo on the thumb (Clips Small language) — frees the strip.
         if self._spec.footer_mode == "info" and not self._icon.isNull():
             inset = 6
@@ -495,7 +497,7 @@ class ScreenshotPhoto(QWidget):
         foot_clip = foot_path.intersected(card)
         p.fillPath(foot_clip, footer_bg)
         if is_steempeg:
-            p.fillPath(foot_clip, _STEEMPEG_FOOTER_WASH)
+            p.fillPath(foot_clip, accent_qcolor(_STEEMPEG_FOOTER_WASH))
 
         from PySide6.QtGui import QFont as _QF
 
@@ -599,7 +601,7 @@ class ScreenshotPhoto(QWidget):
                     meta_rect.height(),
                 )
                 p.setFont(meta_font)
-                p.setPen(_STEEMPEG_META_FG if is_steempeg else _META_FG)
+                p.setPen(accent_qcolor(_STEEMPEG_META_FG) if is_steempeg else _META_FG)
                 p.drawText(
                     meta_draw,
                     int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
@@ -628,11 +630,11 @@ class ScreenshotPhoto(QWidget):
 
         # --- ClipCard border overlay ---
         if getattr(self, "_context_lit", False):
-            border, width = (QColor("#ffffff") if self._opened or self._selected else _ACCENT), 3.0
+            border, width = (QColor("#ffffff") if self._opened or self._selected else accent_qcolor(_ACCENT)), 3.0
         elif self._opened:
             border, width = _ACCENT_OPENED, 2.5
         elif self._selected:
-            border, width = _ACCENT, 3.0
+            border, width = accent_qcolor(_ACCENT), 3.0
         elif self._hovered:
             border, width = _ACCENT_HOVER, 2.0
         elif is_steempeg:

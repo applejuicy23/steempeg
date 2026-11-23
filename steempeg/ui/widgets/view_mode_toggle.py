@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from steempeg.ui import design_tokens as tok
 from steempeg.ui import ui_theme as ut
+from steempeg.ui.pro_appearance import accent_color
 from steempeg.ui.icon_assets import (
     CARD_SIZE_GRID_TINT,
     card_size_grid_icon,
@@ -122,11 +123,11 @@ class _ViewModeTile(QPushButton):
         selected = self.isChecked()
         hovered = self.underMouse()
         if selected:
-            bg = QColor(chrome.tile_selected_bg)
-            border = QColor(chrome.tile_selected_border)
+            bg = QColor(accent_color(chrome.tile_selected_bg))
+            border = QColor(accent_color(chrome.tile_selected_border))
         elif hovered:
             bg = QColor(chrome.tile_hover_bg)
-            border = QColor(chrome.tile_hover_border)
+            border = QColor(accent_color(chrome.tile_hover_border))
         else:
             bg = QColor(chrome.tile_bg)
             border = QColor(chrome.tile_border)
@@ -134,7 +135,7 @@ class _ViewModeTile(QPushButton):
         p.setBrush(bg)
         p.drawRoundedRect(1, 1, self.width() - 2, self.height() - 2, 8, 8)
 
-        tint = chrome.glyph_selected if selected else chrome.glyph
+        tint = accent_color(chrome.glyph_selected) if selected else chrome.glyph
         if self._mode_key == _LIST_KEY:
             glyph = view_mode_list_pixmap(_POPUP_GLYPH_PX, color=tint)
             label = "List"
@@ -146,7 +147,7 @@ class _ViewModeTile(QPushButton):
             gy = 10
             p.drawPixmap(gx, gy, glyph)
 
-        p.setPen(QColor(chrome.label_selected if selected else chrome.label))
+        p.setPen(QColor(accent_color(chrome.label_selected) if selected else chrome.label))
         font = QFont(tok.FONT_APP)
         font.setBold(True)
         font.setPixelSize(11)
@@ -356,14 +357,15 @@ class ViewModeChrome(QObject):
         self.btn_view_grid.setFixedSize(side, side)
         self.btn_view_grid.setStyleSheet(style)
         self.btn_view_grid.setText("")
+        tint = accent_color(_TOOLBAR_GLYPH)
         if list_on:
             self.btn_view_grid.setIcon(
-                view_mode_list_icon(glyph_px, color=_TOOLBAR_GLYPH)
+                view_mode_list_icon(glyph_px, color=tint)
             )
             self.btn_view_grid.setToolTip("View — List")
         else:
             self.btn_view_grid.setIcon(
-                card_size_grid_icon("big", glyph_px, color=_TOOLBAR_GLYPH)
+                card_size_grid_icon("big", glyph_px, color=tint)
             )
             self.btn_view_grid.setToolTip("View — Grid")
         self.btn_view_grid.setIconSize(QSize(glyph_px, glyph_px))
