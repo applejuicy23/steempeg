@@ -40,6 +40,30 @@ from steempeg.ui.render_pro_controls import (
 
 _TRANSIENT_STATUS_MS = 3500
 
+
+class RenderSettingsInputFilter(QObject):
+    """Resolve the active clip before its quality or FPS control handles input."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self._app = app
+
+    def eventFilter(self, combo, event):  # noqa: N802
+        if event.type() == QEvent.Type.Show:
+            if combo is self._app.ui.combo_quality:
+                self._app._schedule_visible_render_settings_populate()
+        elif event.type() in (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonDblClick,
+            QEvent.Type.KeyPress,
+            QEvent.Type.Wheel,
+        ):
+            self._app._prepare_pending_render_settings()
+            # Preparing the new clip may lock FPS when its preset is Original.
+            return not combo.isEnabled()
+        return False
+
+
 _DEFAULT_CLIP_SESSION = {
     "is_trim_mode": False,
     "trim_start_ms": 0,
@@ -4086,6 +4110,8 @@ class RenderMixin:
             gen, clip_path, session, bool(preserve_ui_selection)
         )
         self._sync_start_render_enabled()
+        if self.ui.combo_quality.isVisible():
+            self._schedule_visible_render_settings_populate()
         # Already revealed / idle — flush on next tick; otherwise finish does it.
         if not getattr(self, "_awaiting_first_frame", False) and not getattr(
             self, "_is_switching", False
@@ -4149,6 +4175,31 @@ class RenderMixin:
             self._run_quality_populate_after_open(*pending)
 
         QTimer.singleShot(240, populate_if_current)
+
+    def _schedule_visible_render_settings_populate(self) -> None:
+        if self._pending_render_settings() is None:
+            return
+        generation = self._clips_quality_gen
+
+        def populate_if_visible():
+            if generation == self._clips_quality_gen and self.ui.combo_quality.isVisible():
+                self._prepare_pending_render_settings()
+
+        QTimer.singleShot(0, populate_if_visible)
+
+    def _pending_render_settings(self):
+        return (
+            getattr(self, "_pending_quality_populate", None)
+            or getattr(self, "_deferred_quality_populate", None)
+        )
+
+    def _prepare_pending_render_settings(self) -> None:
+        pending = self._pending_render_settings()
+        if pending is None:
+            return
+        self._pending_quality_populate = None
+        self._deferred_quality_populate = None
+        self._run_quality_populate_after_open(*pending)
 
     def fit_settings_tab_to_page(self, idx=None):
         """ Keep the scroll content as tall as the CURRENT settings page only.

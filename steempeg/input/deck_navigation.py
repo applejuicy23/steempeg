@@ -116,19 +116,28 @@ def _queue_pin_combo_popup(widget: QObject) -> None:
 def _pin_combo_popup(window: QWidget) -> None:
     """Turn a Qt.Popup list into a tool window so the Dev pad can click it."""
     try:
-        if window.property("_steempeg_pinning"):
+        window.setProperty("_steempeg_popup_pin_queued", False)
+        if window.property("_steempeg_pinning") or not window.isVisible():
             return
     except RuntimeError:
         return
-    window.setProperty("_steempeg_popup_pin_queued", False)
     if _popup_is_tool(window):
         window.setProperty(_PINNED_POPUP, True)
         return
     from steempeg.ui.settings_prefs import deck_controls_enabled
 
     qapp = QApplication.instance()
-    holder = getattr(qapp, "_steempeg_popup_hold_app", None) if qapp is not None else None
-    if not deck_controls_enabled(app=holder):
+    if qapp is None:
+        return
+    # Only mouse clicks on the virtual pad need a separate tool window.
+    # Hardware input works with a native popup; swapping its flags on Windows
+    # can briefly deactivate the app and close the list during the same click.
+    if not any(
+        page is not None and page.isVisible()
+        for page in (getattr(w, "_deck_pad_page", None) for w in qapp.topLevelWidgets())
+    ):
+        return
+    if not deck_controls_enabled(app=getattr(qapp, "_steempeg_popup_hold_app", None)):
         return
     window.setProperty("_steempeg_pinning", True)
     geo = window.geometry()

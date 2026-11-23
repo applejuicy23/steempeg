@@ -823,7 +823,8 @@ class DevModeDialog(SteempegDialog):
 
         tabs.addTab(self._build_render_qa_tab(), "Render QA")
         tabs.addTab(self._build_tools_tab(), "Tools")
-        tabs.addTab(self._build_deck_pad_tab(), "Deck pad")
+        self._deck_pad_page = self._build_deck_pad_tab()
+        tabs.addTab(self._deck_pad_page, "Deck pad")
 
     # ── Render QA Tab ────────────────────────────────────────────────────────
 

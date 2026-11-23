@@ -16,7 +16,7 @@ from steempeg.ui.player.controls.timeline import CustomTimelineWidget
 from steempeg.ui.library.filters import FilterMenu
 from steempeg.ui.updater_mixin import UpdaterMixin
 from steempeg.ui.settings.controller import SettingsMixin
-from steempeg.ui.render_controller import RenderMixin
+from steempeg.ui.render_controller import RenderMixin, RenderSettingsInputFilter
 from steempeg.render.queue import RenderQueue
 from steempeg.ui.library.controller import LibraryMixin
 from steempeg.ui.library.rendered_library import RenderedLibraryMixin
@@ -1482,6 +1482,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         restyle_source_page(self.ui)
         restyle_export_page(self.ui)
         restyle_presets_page(self.ui, self)
+        self._render_settings_input_filter = RenderSettingsInputFilter(self)
+        self.ui.combo_quality.installEventFilter(self._render_settings_input_filter)
+        self.ui.combo_fps.installEventFilter(self._render_settings_input_filter)
 
         # Give each render combo its OWN stylesheet so the field text matches the
         # Source Info value labels (Segoe UI, 14px, bold) instead of the app default.
