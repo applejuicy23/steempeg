@@ -256,7 +256,11 @@ class SettingsRailButton(QPushButton):
         icon_x = contents.left()
         color = self._label_color()
         glyph_color = _PRO_STAR if self._pro_rail else color
-        if self._glyph_file:
+        if self.text() == "Ko-fi":
+            from steempeg.ui.icon_assets import load_pixmap
+
+            painter.drawPixmap(QRect(icon_x, icon_y, icon, icon), load_pixmap("kofi.png", icon))
+        elif self._glyph_file:
             pix = stroke_svg_icon(self._glyph_file, glyph_color, icon).pixmap(
                 QSize(icon, icon)
             )
@@ -384,6 +388,12 @@ class SettingsRailFrame(QWidget):
         if 0 <= index < len(self.buttons):
             self.buttons[index].setChecked(True)
 
+    def set_page_visible(self, index: int, visible: bool, *, fallback: int) -> None:
+        if not visible and self.stack.currentIndex() == index:
+            self.stack.setCurrentIndex(fallback)
+        self.buttons[index].setVisible(visible)
+        self.stack.widget(index).setEnabled(visible)
+
     def apply_ui_theme_chrome(self) -> None:
         """Re-tints the rail pills after a theme change."""
         for btn in self.buttons:
@@ -412,6 +422,7 @@ class SettingsScrollFrame(QWidget):
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(0)
         self._titles: list[QLabel] = []
+        self._pages = [page for _, page in pages]
         for title, page in pages:
             title_label = QLabel(title)
             title_label.setObjectName("settingsPageTitle")
@@ -437,7 +448,7 @@ class SettingsScrollFrame(QWidget):
 
     def scroll_to_page(self, index: int) -> None:
         """Scrolls so the page title sits at the top, then lights its rail pill."""
-        if not 0 <= index < len(self._titles):
+        if not 0 <= index < len(self._titles) or self._titles[index].isHidden():
             return
         bar = self._scroll.verticalScrollBar()
         bar.setValue(min(bar.maximum(), self._titles[index].y()))
@@ -448,13 +459,25 @@ class SettingsScrollFrame(QWidget):
         if not self._titles:
             return
         current = 0
+        last_visible = 0
         for index, title_label in enumerate(self._titles):
+            if title_label.isHidden():
+                continue
+            last_visible = index
             if title_label.y() - _ANCHOR_SLACK_PX <= value:
                 current = index
         bar = self._scroll.verticalScrollBar()
         if bar.maximum() > 0 and value >= bar.maximum():
-            current = len(self._titles) - 1
+            current = last_visible
         self.buttons[current].setChecked(True)
+
+    def set_page_visible(self, index: int, visible: bool, *, fallback: int) -> None:
+        was_selected = self.buttons[index].isChecked()
+        self.buttons[index].setVisible(visible)
+        self._titles[index].setVisible(visible)
+        self._pages[index].setVisible(visible)
+        if not visible and was_selected:
+            self.scroll_to_page(fallback)
 
     def apply_ui_theme_chrome(self) -> None:
         """Re-tints the rail pills and page titles after a theme change."""

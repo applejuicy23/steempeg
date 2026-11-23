@@ -1415,6 +1415,11 @@ def _cycle_app_settings_tab(app: Any, delta: int) -> None:
     count = tabs.count()
     cur = tabs.currentIndex()
     nxt = (cur + delta) % count
+    while nxt != cur and (
+        not tabs.widget(nxt).isEnabled()
+        or (isinstance(tabs, QTabWidget) and not tabs.isTabVisible(nxt))
+    ):
+        nxt = (nxt + delta) % count
     hide_deck_focus_ring(app)
     if tabs.currentIndex() != nxt:
         tabs.setCurrentIndex(nxt)
