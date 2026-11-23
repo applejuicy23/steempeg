@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (
 from steempeg.core.clip_thumbnails import resolve_clip_thumbnail
 from steempeg.infra import paths
 from steempeg.infra.paths import get_resource_path, get_save_directory
-from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
+from steempeg.ui.pro_appearance import render_status_color
+from steempeg.render.queue import JobStatus, RenderJob
 from steempeg.render.queue_display import (
     format_job_datetime_line,
     format_job_output,
@@ -139,7 +140,7 @@ class QueueGridJobCard(QWidget):
         thumb_lay.setContentsMargins(0, 0, 0, 0)
         thumb_lay.addWidget(self._thumb_label)
 
-        color = STATUS_COLORS.get(job.status, "#ffcc00")
+        color = render_status_color(job.status, "#ffcc00")
         self._index_badge = QLabel(str(job.queue_index), thumb_wrap)
         self._index_badge.setFixedSize(_STATUS_DOT, _STATUS_DOT)
         self._index_badge.setAlignment(Qt.AlignCenter)
@@ -281,7 +282,7 @@ class QueueGridJobCard(QWidget):
         self._selected = selected
         self._drop_highlight = False
         self._index_badge.setText(str(job.queue_index))
-        color = STATUS_COLORS.get(job.status, "#ffcc00")
+        color = render_status_color(job.status, "#ffcc00")
         self._index_badge.setStyleSheet(
             _status_dot_style(color, dense=getattr(self, "_dense", None))
         )

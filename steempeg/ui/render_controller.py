@@ -101,6 +101,9 @@ from steempeg.render.encode_speed import (
     encoder_family,
     normalize_encode_speed,
 )
+from steempeg.ui.pro_appearance import (
+    ERROR_RENDER_COLOR, accent_color, pro_accents_enabled, render_status_color, themed_asset_path,
+)
 from steempeg.render.queue import (
     JobStatus,
     PREVIEW_BADGE_COLOR,
@@ -147,7 +150,6 @@ PAUSED_BADGE_TEXT = "Paused"
 PAUSED_BADGE_COLOR = "#ffcc00"
 CANCELED_BADGE_TEXT = "Canceled"
 CANCELED_BADGE_COLOR = "#ff6b6b"  # distinct from Error #ff4444
-ERROR_BADGE_COLOR = STATUS_COLORS[JobStatus.ERROR]
 
 
 def _source_vbitrate_label(mbps: float) -> str:
@@ -890,7 +892,12 @@ class RenderMixin:
             "cancelled": "#ff4444",
             "accent": ACCENT_PRIMARY,
         }
-        color = colors.get(state, "#a871ff")
+        color = accent_color(colors.get(state, "#a871ff"))
+        if pro_accents_enabled():
+            if state == "rendering":
+                color = render_status_color(JobStatus.RENDERING)
+            elif state == "error":
+                color = render_status_color(JobStatus.ERROR)
         queue_index = None
         job = None
         if self._queue_is_active():
@@ -899,9 +906,9 @@ class RenderMixin:
             if job is not None:
                 queue_index = int(getattr(job, "queue_index", 0) or 0) or None
                 if state in ("rendering", "busy") and job.status == JobStatus.RENDERING:
-                    color = STATUS_COLORS[JobStatus.RENDERING]
+                    color = render_status_color(JobStatus.RENDERING)
                 elif state == "error":
-                    color = STATUS_COLORS[JobStatus.ERROR]
+                    color = render_status_color(JobStatus.ERROR)
                 elif state == "paused":
                     color = colors["paused"]
         preserve_progress = state in ("cancelling", "cancelled", "paused")
@@ -1281,7 +1288,7 @@ class RenderMixin:
             pass
         radius = sz // 2
         # Dark digit on bright badge colours (yellow/orange/green); light on red.
-        ink = "#ffffff" if color.lower() in ("#ff4444", "#ff0000") else "#1a1a1a"
+        ink = "#ffffff" if color.lower() in ("#ff4444", "#ff0000", ERROR_RENDER_COLOR) else "#1a1a1a"
         dot.setStyleSheet(
             f"background-color: {color}; color: {ink}; border-radius: {radius}px; "
             f"font-size: {font}px; font-weight: 800; "
@@ -1311,7 +1318,7 @@ class RenderMixin:
 
         self._apply_status_strip_summary(job)
 
-        color = STATUS_COLORS.get(job.status, STATUS_COLORS[JobStatus.QUEUED])
+        color = render_status_color(job.status, STATUS_COLORS[JobStatus.QUEUED])
         index = int(getattr(job, "queue_index", 0) or 0) or 1
         if job.status == JobStatus.QUEUED:
             label = "Ready"
@@ -4777,7 +4784,7 @@ class RenderMixin:
                 target_icon = getattr(self, 'current_game_icon', '')
 
         unknown_icon_path = get_resource_path("unknown_icon.png")
-        logo_path = get_resource_path("logo.png")
+        logo_path = themed_asset_path("logo.png")
         if not target_icon or not os.path.exists(target_icon):
             target_icon = unknown_icon_path
         place_icon = target_icon
@@ -6986,7 +6993,7 @@ class RenderMixin:
                 return PAUSED_BADGE_TEXT, PAUSED_BADGE_COLOR
             return (
                 STATUS_HEADER_LABELS[JobStatus.RENDERING],
-                STATUS_COLORS[JobStatus.RENDERING],
+                render_status_color(JobStatus.RENDERING),
             )
 
         # Live encode → orange Rendering (or yellow Paused) next to Healthy, even
@@ -7004,7 +7011,7 @@ class RenderMixin:
         if idle:
             err_path = getattr(self, "_error_plaque_clip_path", None)
             if err_path:
-                return STATUS_HEADER_LABELS[JobStatus.ERROR], ERROR_BADGE_COLOR
+                return STATUS_HEADER_LABELS[JobStatus.ERROR], render_status_color(JobStatus.ERROR)
             remembered = getattr(self, "_completed_plaque_clip_path", None)
             if remembered:
                 return (
@@ -7023,9 +7030,9 @@ class RenderMixin:
         # Error — queue job or single-render latch (same idea as Completed).
         err_path = getattr(self, "_error_plaque_clip_path", None)
         if err_path and _same_clip(err_path, clip_path):
-            return STATUS_HEADER_LABELS[JobStatus.ERROR], ERROR_BADGE_COLOR
+            return STATUS_HEADER_LABELS[JobStatus.ERROR], render_status_color(JobStatus.ERROR)
         if job is not None and job.status == JobStatus.ERROR:
-            return STATUS_HEADER_LABELS[JobStatus.ERROR], ERROR_BADGE_COLOR
+            return STATUS_HEADER_LABELS[JobStatus.ERROR], render_status_color(JobStatus.ERROR)
 
         # Completed — queue rows, and a single Start Render until its success
         # dialog closes. Single-clip exports never land a COMPLETED row, so the
@@ -7057,16 +7064,16 @@ class RenderMixin:
                                 or f"In queue ({job.queue_index})",
                                 STATUS_COLORS[JobStatus.QUEUED],
                             )
-                        return STATUS_HEADER_LABELS[job.status], STATUS_COLORS[job.status]
+                        return STATUS_HEADER_LABELS[job.status], render_status_color(job.status)
                 return None, None
 
         if job:
             if job.status == JobStatus.ERROR:
-                return STATUS_HEADER_LABELS[JobStatus.ERROR], ERROR_BADGE_COLOR
+                return STATUS_HEADER_LABELS[JobStatus.ERROR], render_status_color(JobStatus.ERROR)
             if job.status == JobStatus.RENDERING:
                 if self._encode_is_paused():
                     return PAUSED_BADGE_TEXT, PAUSED_BADGE_COLOR
-                return STATUS_HEADER_LABELS[JobStatus.RENDERING], STATUS_COLORS[JobStatus.RENDERING]
+                return STATUS_HEADER_LABELS[JobStatus.RENDERING], render_status_color(JobStatus.RENDERING)
             return (
                 self._in_queue_label_for_clip(clip_path)
                 or f"In queue ({job.queue_index})",

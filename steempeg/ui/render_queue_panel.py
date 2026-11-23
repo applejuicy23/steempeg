@@ -26,7 +26,8 @@ from PySide6.QtWidgets import (
 from steempeg.infra import paths
 from steempeg.infra.paths import get_save_directory
 from steempeg.ui.icon_assets import load_icon
-from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
+from steempeg.ui.pro_appearance import render_status_color
+from steempeg.render.queue import JobStatus, RenderJob
 from steempeg.render.queue_display import (
     format_job_datetime_line,
     format_job_output,
@@ -621,7 +622,7 @@ class QueueJobCard(QFrame):
         return bool(getattr(self, "_loading", False))
 
     def _refresh_num_style(self) -> None:
-        color = STATUS_COLORS.get(self._job.status, "#ffcc00")
+        color = render_status_color(self._job.status, "#ffcc00")
         self._num_label.setStyleSheet(
             _status_dot_style(color, dense=getattr(self, "_dense", None))
         )

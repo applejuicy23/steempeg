@@ -9,9 +9,15 @@ from PySide6.QtCore import Qt, QTimer, QRectF
 from PySide6.QtGui import QColor, QLinearGradient, QPainter
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
+from steempeg.ui.pro_appearance import (
+    ACTIVE_RENDER_COLOR, ERROR_RENDER_COLOR, accent_qcolor, pro_accents_enabled,
+)
+
 _TRACK = QColor("#414141")
 _GRADIENT_START = QColor("#6b5a8e")
 _GRADIENT_END = QColor("#b29ae7")
+_RENDER_GRADIENT_START = QColor("#b32d2d")
+_RENDER_GRADIENT_END = QColor(ACTIVE_RENDER_COLOR)
 _SHIMMER = QColor(255, 255, 255, 72)
 
 _STATE_FILL = {
@@ -178,12 +184,14 @@ class AnimatedRenderBar(QWidget):
         mode = _STATE_FILL.get(self._state)
 
         if mode == "gradient" or self._state == "rendering":
+            start, end = self._gradient_colors()
             grad = QLinearGradient(0.0, 0.0, fill_w, 0.0)
-            grad.setColorAt(0.0, _GRADIENT_START)
-            grad.setColorAt(1.0, _GRADIENT_END)
+            grad.setColorAt(0.0, start)
+            grad.setColorAt(1.0, end)
             painter.setBrush(grad)
         elif isinstance(mode, QColor):
-            painter.setBrush(mode)
+            color = QColor(ERROR_RENDER_COLOR) if self._state == "error" and pro_accents_enabled() else mode
+            painter.setBrush(color)
         else:
             painter.end()
             return
@@ -195,11 +203,17 @@ class AnimatedRenderBar(QWidget):
 
         painter.end()
 
+    def _gradient_colors(self) -> tuple[QColor, QColor]:
+        if self._state == "rendering" and pro_accents_enabled():
+            return _RENDER_GRADIENT_START, _RENDER_GRADIENT_END
+        return accent_qcolor(_GRADIENT_START), accent_qcolor(_GRADIENT_END)
+
     def _segment_gradient(self, x: float, seg: float) -> QLinearGradient:
+        start, end = self._gradient_colors()
         grad = QLinearGradient(x, 0.0, x + seg, 0.0)
-        grad.setColorAt(0.0, _GRADIENT_START)
-        grad.setColorAt(0.5, _GRADIENT_END)
-        grad.setColorAt(1.0, _GRADIENT_START)
+        grad.setColorAt(0.0, start)
+        grad.setColorAt(0.5, end)
+        grad.setColorAt(1.0, start)
         return grad
 
     def _paint_bounce(self, painter, track, radius):

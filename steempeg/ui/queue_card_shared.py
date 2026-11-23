@@ -7,7 +7,8 @@ from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel, QWidget
 
 from steempeg.core.clip_thumbnails import resolve_clip_thumbnail
 from steempeg.infra.paths import get_resource_path
-from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
+from steempeg.ui.pro_appearance import render_status_color
+from steempeg.render.queue import JobStatus, RenderJob
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.ui_density import COMFORT, UiDensity
 
@@ -47,9 +48,9 @@ def status_border_for_job(job: RenderJob, jobs: list[RenderJob]) -> tuple[str, i
     if st == JobStatus.COMPLETED:
         return STATUS_BORDER_DONE, w
     if st == JobStatus.ERROR:
-        return STATUS_BORDER_ERROR, w
+        return render_status_color(st, STATUS_BORDER_ERROR), w
     if st == JobStatus.RENDERING:
-        return STATUS_BORDER_RENDER, w
+        return render_status_color(st, STATUS_BORDER_RENDER), w
 
     rendering = any(getattr(j, "status", None) == JobStatus.RENDERING for j in jobs)
     queued = [j for j in jobs if getattr(j, "status", None) == JobStatus.QUEUED]
@@ -164,7 +165,7 @@ def build_queue_thumb_strip(
     thumb.setStyleSheet("background-color: #1a1a1a; border: none; border-radius: 8px;")
     set_thumb_pixmap(thumb, job.clip_path, width, height, cache_dir=cache_dir)
 
-    color = STATUS_COLORS.get(job.status, "#ffcc00")
+    color = render_status_color(job.status, "#ffcc00")
     badge = QLabel(str(job.queue_index), wrap)
     badge.setFixedSize(_STATUS_DOT, _STATUS_DOT)
     badge.setAlignment(Qt.AlignmentFlag.AlignCenter)

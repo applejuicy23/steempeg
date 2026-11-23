@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path, get_save_directory, reveal_in_file_manager
-from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
+from steempeg.ui.pro_appearance import render_status_color
+from steempeg.render.queue import JobStatus, RenderJob
 from steempeg.render.queue_display import (
     format_job_datetime_line,
     format_job_output,
@@ -790,7 +791,7 @@ class PortableQueueSidebar(QWidget):
                 idx = int(getattr(job, "queue_index", 0) or 0) or i
             except (TypeError, ValueError):
                 idx = i
-            row.set_index(idx, color=STATUS_COLORS.get(job.status, "#ffcc00"))
+            row.set_index(idx, color=render_status_color(job.status, "#ffcc00"))
             border, border_w = status_border_for_job(job, jobs)
             row.set_status_border(border, border_w)
             row.set_selected(job.id in self._selected_ids)

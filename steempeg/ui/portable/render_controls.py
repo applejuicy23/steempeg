@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import ui_theme as ut
+from steempeg.ui.pro_appearance import ACTIVE_RENDER_COLOR, ERROR_RENDER_COLOR, accent_color, pro_accents_enabled
 from steempeg.ui.widgets.animated_render_bar import AnimatedRenderBar
 
 # Exact copies of desktop render-dashboard templates (app.py).
@@ -404,7 +405,12 @@ class PortableRenderControlStrip(QFrame):
     def apply_status(self, text: str, state: str = "ready", percent: float | None = None) -> None:
         state = state or "ready"
         self._state = state
-        color = _STATUS_COLORS.get(state, "#a871ff")
+        color = accent_color(_STATUS_COLORS.get(state, "#a871ff"))
+        if pro_accents_enabled():
+            if state == "rendering":
+                color = ACTIVE_RENDER_COLOR
+            elif state == "error":
+                color = ERROR_RENDER_COLOR
         display = (text or "Ready").strip() or "Ready"
         self.status_label.setText(display)
         self.status_label.setStyleSheet(

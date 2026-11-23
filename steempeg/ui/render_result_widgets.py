@@ -8,6 +8,8 @@ from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
+from steempeg.ui.pro_appearance import accent_qcolor
+
 from steempeg.core.clip_thumbnails import resolve_clip_thumbnail_ui_safe
 from steempeg.infra.paths import get_resource_path
 from steempeg.render.queue import JobStatus
@@ -108,7 +110,7 @@ class _ExportPreview(QWidget):
         width = painter.fontMetrics().horizontalAdvance(self.extension) + 12
         chip = QRectF(self.width()-width-6, self.height()-23, width, 17)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#b29ae7"))
+        painter.setBrush(accent_qcolor(QColor("#b29ae7")))
         painter.drawRoundedRect(chip, 4, 4)
         painter.setPen(QColor("#16121d"))
         painter.drawText(chip, Qt.AlignmentFlag.AlignCenter, self.extension)

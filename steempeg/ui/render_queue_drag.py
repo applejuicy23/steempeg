@@ -22,6 +22,8 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QWidget
 
+from steempeg.ui.pro_appearance import accent_qcolor
+
 from steempeg.render.queue import JobStatus
 
 _SLIDE_MS = 170
@@ -62,7 +64,7 @@ def render_lifted_card_pixmap(card: QWidget) -> tuple[QPixmap, float]:
     painter.scale(scale, scale)
     card.render(painter, QPoint(0, 0))
     painter.restore()
-    painter.setPen(QPen(QColor("#b29ae7"), 2))
+    painter.setPen(QPen(accent_qcolor(QColor("#b29ae7")), 2))
     painter.setBrush(Qt.BrushStyle.NoBrush)
     painter.drawRoundedRect(QRectF(1, 1, out_w - 2, out_h - 2), radius - 1, radius - 1)
     painter.end()
