@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from PySide6.QtGui import QIcon, QPainter, QPixmap, QColor, QTransform, QImage, QPen
+from PySide6.QtGui import QIcon, QPainter, QPainterPath, QPixmap, QColor, QTransform, QImage, QPen
 from PySide6.QtCore import QPointF, QRectF, Qt
 
 from steempeg.core.dash.health import WARNING_ICON_FILE, ClipHealth, HEALTH_ICON_FILES
@@ -56,6 +56,28 @@ def _icon_from_pixmap(pix: QPixmap) -> QIcon:
 
 def load_icon(name: str, size: int = 16) -> QIcon:
     return _icon_from_pixmap(load_pixmap(name, size))
+
+
+@lru_cache(maxsize=8)
+def eye_off_icon(size: int = 18) -> QIcon:
+    """Outline eye with a diagonal slash, matching the Settings rail glyphs."""
+    frame = QPixmap(size * 2, size * 2)
+    frame.setDevicePixelRatio(2)
+    frame.fill(Qt.GlobalColor.transparent)
+    with QPainter(frame) as painter:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.scale(size / 24, size / 24)
+        painter.setPen(QPen(QColor("#e0e0e0"), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        eye = QPainterPath()
+        eye.moveTo(9, 5.4)
+        eye.cubicTo(14.3, 3.7, 19, 7, 22, 12)
+        eye.cubicTo(21.2, 13.3, 20.3, 14.6, 19.2, 15.6)
+        eye.moveTo(5.2, 8)
+        eye.cubicTo(4, 9.1, 2.9, 10.5, 2, 12)
+        eye.cubicTo(5, 17.4, 11, 20.5, 16.2, 18.2)
+        painter.drawPath(eye)
+        painter.drawLine(QPointF(3, 3), QPointF(21, 21))
+    return _icon_from_pixmap(frame)
 
 
 def arrow_pixmap(size: int = 12, *, direction: str = "down") -> QPixmap:

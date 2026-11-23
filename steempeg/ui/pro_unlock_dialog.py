@@ -84,7 +84,7 @@ def _unlock_extra_stylesheet(*, support_font: str) -> str:
 """
 
 
-def ask_steempeg_pro_unlock(parent=None) -> ProUnlockChoice:
+def ask_steempeg_pro_unlock(parent=None, *, show_kofi: bool = True) -> ProUnlockChoice:
     """Show the free-PRO tip dialog (About plate + Ko-fi Support button).
 
     Returns:
@@ -98,10 +98,7 @@ def ask_steempeg_pro_unlock(parent=None) -> ProUnlockChoice:
     from steempeg.ui.icon_utils import apply_square_icon, app_logo_pixmap
     from steempeg.ui.ui_density import scaled_dialog_size
 
-    kofi_url = resolve_kofi_url(refresh=True, timeout=2.5)
-    kofi_host = display_kofi_host(kofi_url)
-
-    fredoka = register_bundled_fredoka()
+    fredoka = register_bundled_fredoka() if show_kofi else ""
     choice: dict[str, ProUnlockChoice] = {"value": "dismiss"}
 
     dialog = QDialog(parent)
@@ -170,64 +167,69 @@ def ask_steempeg_pro_unlock(parent=None) -> ProUnlockChoice:
     headline.setAlignment(Qt.AlignmentFlag.AlignHCenter)
     content.addWidget(headline)
 
-    pitch = QLabel(
-        "If you can, a small tip on Ko-fi helps keep this project going — "
-        "thank you in advance."
-    )
-    pitch.setObjectName("ProUnlockPitch")
-    pitch.setWordWrap(True)
-    pitch.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-    content.addWidget(pitch)
+    if show_kofi:
+        kofi_url = resolve_kofi_url(refresh=False)
+        pitch = QLabel(
+            "If you can, a small tip on Ko-fi helps keep this project going — "
+            "thank you in advance."
+        )
+        pitch.setObjectName("ProUnlockPitch")
+        pitch.setWordWrap(True)
+        pitch.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        content.addWidget(pitch)
 
-    dim = QLabel(kofi_host)
-    dim.setObjectName("ProUnlockPitch")
-    dim.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-    content.addWidget(dim)
+        dim = QLabel(display_kofi_host(kofi_url))
+        dim.setObjectName("ProUnlockPitch")
+        dim.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        content.addWidget(dim)
 
-    content.addStretch(1)
-    content.addSpacing(8)
+        content.addStretch(1)
+        content.addSpacing(8)
 
-    # Exact Ko-fi dialog Support CTA (object name + metrics + Fredoka).
-    btn_donate = QPushButton("  Support on Ko-fi")
-    btn_donate.setObjectName("KofiSupportBtn")
-    btn_donate.setCursor(Qt.CursorShape.PointingHandCursor)
-    btn_donate.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-    support_font = QFont()
-    if fredoka:
-        support_font.setFamily(fredoka)
-    else:
-        support_font.setFamilies(["Candara", "Calibri", "Segoe UI"])
-    support_font.setPointSize(17)
-    support_font.setWeight(QFont.Weight.Bold)
-    btn_donate.setFont(support_font)
-    cup = load_pixmap(KOFI_MARK, 28)
-    if not cup.isNull():
-        btn_donate.setIcon(QIcon(cup))
-        btn_donate.setIconSize(cup.size())
+        # Exact Ko-fi dialog Support CTA (object name + metrics + Fredoka).
+        btn_donate = QPushButton("  Support on Ko-fi")
+        btn_donate.setObjectName("KofiSupportBtn")
+        btn_donate.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_donate.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        support_font = QFont()
+        if fredoka:
+            support_font.setFamily(fredoka)
+        else:
+            support_font.setFamilies(["Candara", "Calibri", "Segoe UI"])
+        support_font.setPointSize(17)
+        support_font.setWeight(QFont.Weight.Bold)
+        btn_donate.setFont(support_font)
+        cup = load_pixmap(KOFI_MARK, 28)
+        if not cup.isNull():
+            btn_donate.setIcon(QIcon(cup))
+            btn_donate.setIconSize(cup.size())
 
-    def _donate() -> None:
-        choice["value"] = "donate"
-        try:
-            webbrowser.open(kofi_url)
-        except Exception:
-            pass
-        dialog.accept()
+        def _donate() -> None:
+            choice["value"] = "donate"
+            try:
+                webbrowser.open(kofi_url)
+            except Exception:
+                pass
+            dialog.accept()
 
-    btn_donate.clicked.connect(_donate)
-    donate_row = QHBoxLayout()
-    donate_row.addStretch(1)
-    donate_row.addWidget(btn_donate)
-    donate_row.addStretch(1)
-    content.addLayout(donate_row)
+        btn_donate.clicked.connect(_donate)
+        donate_row = QHBoxLayout()
+        donate_row.addStretch(1)
+        donate_row.addWidget(btn_donate)
+        donate_row.addStretch(1)
+        content.addLayout(donate_row)
 
     # About Close — bare QPushButton under about_secondary_button_stylesheet.
-    btn_cancel = QPushButton("Cancel")
+    btn_cancel = QPushButton("Cancel" if show_kofi else "Enable PRO")
     btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
     btn_cancel.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
 
     def _cancel() -> None:
         choice["value"] = "cancel"
-        dialog.reject()
+        if show_kofi:
+            dialog.reject()
+        else:
+            dialog.accept()
 
     btn_cancel.clicked.connect(_cancel)
     cancel_row = QHBoxLayout()

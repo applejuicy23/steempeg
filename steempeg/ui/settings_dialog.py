@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from steempeg.ui.icon_assets import title_bar_info_pixmap
+from steempeg.ui.icon_assets import eye_off_icon, load_icon, load_pixmap, title_bar_info_pixmap
 from steempeg.ui.pro_appearance import (
     DEFAULT_PRO_ACCENT,
     KEY_PRO_ACCENT_COLOR,
@@ -147,6 +147,8 @@ from steempeg.ui.shell_chooser import (
     load_ui_shell,
 )
 from steempeg.ui.settings_prefs import (
+    KEY_HIDE_KOFI,
+    load_hide_kofi,
     CLOCK_FORMAT_LABELS,
     DATE_FORMAT_LABELS,
     DEFAULT_MARKERS_ON_STRIP,
@@ -469,27 +471,8 @@ def _pro_kofi_support_stylesheet() -> str:
     """
 
 
-class _PromoKofiMark(QLabel):
-    """Ko-fi cup at the link's text size. A click opens the tip page."""
-
-    def __init__(self, on_click, parent=None):
-        super().__init__(parent)
-        self._on_click = on_click
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("Opens Ko-fi")
-        self.setStyleSheet("background: transparent; border: none; padding: 0;")
-
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
-        """Open the tip page. The cup is the click target, not a second button."""
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._on_click()
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-
 class SettingsDialog(SteempegDialog):
-    """App Settings — General · Visual · Notifications · Performance · Support · PRO · Advanced.
+    """Application-wide preferences, including appearance and support.
 
     Stock frame is the section rail with cards; Dev can open the one-scroll or
     classic-tabs frame (``settings_layout``).
@@ -539,6 +522,12 @@ class SettingsDialog(SteempegDialog):
         """Refresh values sourced from live state rather than saved preferences."""
         with QSignalBlocker(self._chk_autostart):
             self._chk_autostart.setChecked(read_autostart_enabled())
+        hidden = load_hide_kofi(_load_settings(self._app))
+        if hidden != self._hide_kofi:
+            self._hide_kofi = hidden
+            self._sync_kofi_visibility()
+        else:
+            self._refresh_kofi_links()
         self._seed_pane_spins_from_live()
         self._refit_pane_percent_spins(seed_hover_queue=True, remember_baseline=True)
         self._reset_apply_baseline()
@@ -548,6 +537,7 @@ class SettingsDialog(SteempegDialog):
         root = self.content_layout
         root.setSpacing(10)
 
+        self._hide_kofi = load_hide_kofi(settings)
         self._settings_pages: list[tuple[str, QWidget, QVBoxLayout]] = []
         self._settings_frame = None
 
@@ -1550,6 +1540,12 @@ class SettingsDialog(SteempegDialog):
 
         # ----- Support -----
         support, s = _tab_page(self)
+        s.addWidget(self._section("Donations"))
+        self._chk_show_kofi = SteempegCheckBox("Show Ko-fi in Steempeg")
+        self._chk_show_kofi.setChecked(not self._hide_kofi)
+        self._chk_show_kofi.toggled.connect(lambda shown: self._set_hide_kofi(not shown))
+        s.addWidget(self._chk_show_kofi)
+
         s.addWidget(self._section("Hints"))
         self._chk_hide_helper_text = SteempegCheckBox("Hide helper text")
         self._committed_hide_helper_text = load_hide_settings_hints(settings)
@@ -1673,6 +1669,11 @@ class SettingsDialog(SteempegDialog):
         pro_lay.addStretch(1)
         self._settings_pages.append(("PRO", pro_page, pro_lay))
 
+        kofi, kofi_layout = _tab_page(self)
+        kofi_layout.addWidget(self._build_kofi_banner())
+        kofi_layout.addStretch(1)
+        self._settings_pages.append(("Ko-fi", kofi, kofi_layout))
+
         yield
 
         # ----- Advanced -----
@@ -1787,6 +1788,7 @@ class SettingsDialog(SteempegDialog):
         self._settings_pages.append(("Advanced", advanced, a))
         yield
         yield from self._mount_settings_frame(root)
+        self._sync_kofi_visibility()
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
@@ -1845,15 +1847,18 @@ class SettingsDialog(SteempegDialog):
             tabs.setStyleSheet(ut.settings_dialog_tabs_stylesheet())
             tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             for title, page, _layout in self._settings_pages:
-                tabs.addTab(_scroll_settings_tab(page), title)
+                tab = _scroll_settings_tab(page)
+                if title == "Ko-fi":
+                    tabs.addTab(tab, load_icon("kofi.png", 16), title)
+                else:
+                    tabs.addTab(tab, title)
             self._settings_tabs = tabs
             root.addWidget(tabs, 1)
             return
 
         for title, _page, page_layout in self._settings_pages:
-            # PRO is only the red banner. A section card would paint a gray
-            # frame around it and shrink the banner inside the card padding.
-            if title == "PRO":
+            # These pages already provide their own banner and padding.
+            if title in ("PRO", "Ko-fi"):
                 continue
             settings_layouts.regroup_page_into_cards(page_layout)
             yield
@@ -2060,6 +2065,98 @@ class SettingsDialog(SteempegDialog):
         if actions_hint is not None:
             actions_hint.setVisible(on and hints_on and not simple)
 
+    def _build_kofi_banner(self) -> QFrame:
+        from steempeg.ui.kofi_dialog import KofiLinkRow, KofiSupportButton
+
+        frame = QFrame()
+        frame.setObjectName("KofiPromoBanner")
+        frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        frame.setStyleSheet(
+            f"QFrame#KofiPromoBanner {{ background: #28201a; border: 1px solid #73543e; border-radius: 12px; }}"
+            f"QLabel#KofiPromoTitle {{ color: #ffe1c9; font: bold 18px {tok.FONT_APP}; background: transparent; }}"
+            f"QLabel#KofiPromoPitch {{ color: #dfcab7; font: 12px {tok.FONT_APP}; background: transparent; }}"
+        )
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(18, 18, 18, 16)
+        layout.setSpacing(0)
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        logo = QLabel()
+        logo.setPixmap(load_pixmap("kofi.png", 48))
+        logo.setFixedSize(48, 48)
+        head.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
+        heading = QVBoxLayout()
+        heading.setSpacing(4)
+        title = QLabel("Ko-fi")
+        title.setObjectName("KofiPromoTitle")
+        heading.addWidget(title)
+        pitch = QLabel("Buy me a coffee.")
+        pitch.setObjectName("KofiPromoPitch")
+        pitch.setWordWrap(True)
+        heading.addWidget(pitch)
+        head.addLayout(heading, 1)
+
+        hide = QPushButton()
+        hide.setObjectName("KofiHideButton")
+        hide.setIcon(eye_off_icon())
+        hide.setIconSize(QSize(18, 18))
+        hide.setFixedSize(34, 34)
+        hide.setCursor(Qt.CursorShape.PointingHandCursor)
+        hide.setAccessibleName("Hide Ko-fi")
+        hide.setToolTip("Hide Ko-fi. To restore it, turn on Show Ko-fi in Support.")
+        hide.clicked.connect(lambda: self._set_hide_kofi(True))
+        head.addWidget(hide, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(head)
+        layout.addSpacing(13)
+
+        support = KofiSupportButton("Support on Ko-fi", 16)
+        support.setObjectName("ProPromoSupportBtn")
+        support.setStyleSheet(_pro_kofi_support_stylesheet())
+        support.setCursor(Qt.CursorShape.PointingHandCursor)
+        support.clicked.connect(self._open_kofi_link)
+        layout.addWidget(support, 0, Qt.AlignmentFlag.AlignLeft)
+        self._kofi_link = KofiLinkRow("#dfcab7", frame)
+        self._kofi_link.layout().setContentsMargins(0, 7, 0, 0)
+        layout.addWidget(self._kofi_link)
+        return frame
+
+    def _sync_kofi_visibility(self) -> None:
+        titles = [title for title, _, _ in self._settings_pages]
+        index, fallback = titles.index("Ko-fi"), titles.index("Support")
+        visible = not self._hide_kofi
+        with QSignalBlocker(self._chk_show_kofi):
+            self._chk_show_kofi.setChecked(visible)
+        if isinstance(self._settings_tabs, QTabWidget):
+            if not visible and self._settings_tabs.currentIndex() == index:
+                self._settings_tabs.setCurrentIndex(fallback)
+            self._settings_tabs.setTabVisible(index, visible)
+        else:
+            self._settings_frame.set_page_visible(index, visible, fallback=fallback)
+        self._sync_pro_promo_banner()
+        self._refresh_kofi_links()
+
+    def _set_hide_kofi(self, hidden: bool) -> None:
+        self._hide_kofi = bool(hidden)
+        self._save_setting(KEY_HIDE_KOFI, self._hide_kofi)
+        self._sync_kofi_visibility()
+        sync = getattr(self._app, "_sync_title_bar_kofi", None)
+        if sync is not None:
+            sync(self._hide_kofi)
+
+    def _refresh_kofi_links(self) -> None:
+        if not self._hide_kofi:
+            self._kofi_link.refresh_url()
+            self._pro_banner._pro_host.refresh_url()
+
+    def _open_kofi_link(self) -> None:
+        if self._hide_kofi:
+            return
+        import webbrowser
+
+        self._refresh_kofi_links()
+        webbrowser.open(self._kofi_link.url)
+
     def _build_pro_promo_banner(self) -> QFrame:
         """Red promo card — Get free / already unlocked."""
         from steempeg.infra.paths import get_resource_path
@@ -2149,38 +2246,22 @@ class SettingsDialog(SteempegDialog):
         btn_off.setStyleSheet(_pro_action_button_stylesheet())
         btn_off.setToolTip("Turn off Steempeg PRO and its appearance options.")
         btn_off.clicked.connect(lambda: self._apply_steempeg_pro(False))
-        from steempeg.ui.kofi_dialog import KofiSupportButton, kofi_cup_pixmap
+        from steempeg.ui.kofi_dialog import KofiLinkRow, KofiSupportButton
 
         btn_support = KofiSupportButton("Support on Ko-fi", 16)
         btn_support.setObjectName("ProPromoSupportBtn")
         btn_support.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_support.setStyleSheet(_pro_kofi_support_stylesheet())
-        btn_support.setToolTip("Opens the tip URL from steempeg-meta.json on the website.")
-        btn_support.clicked.connect(self._on_pro_support_kofi)
+        btn_support.setToolTip("Open Ko-fi")
+        btn_support.clicked.connect(self._open_kofi_link)
         btn_row.addWidget(btn_get)
         btn_row.addWidget(btn_off)
         btn_row.addWidget(btn_support)
         btn_row.addStretch(1)
         lay.addLayout(btn_row)
-        lay.addSpacing(10)
-
-        host_row = QHBoxLayout()
-        host_row.setSpacing(6)
-        host_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        # Pitch label is 12px. The cup is cropped to its ink and scaled to that
-        # same size so it sits on the link, not above it.
-        mark = _PromoKofiMark(self._on_pro_support_kofi, frame)
-        cup = kofi_cup_pixmap(12)
-        if not cup.isNull():
-            mark.setPixmap(cup)
-            mark.setFixedSize(cup.size())
-        host_row.addWidget(mark, 0, Qt.AlignmentFlag.AlignVCenter)
-        host = QLabel("")
-        host.setObjectName("ProPromoPitch")
-        host.setWordWrap(False)
-        host_row.addWidget(host, 0, Qt.AlignmentFlag.AlignVCenter)
-        host_row.addStretch(1)
-        lay.addLayout(host_row)
+        host = KofiLinkRow("#e0c0c0", frame)
+        host.layout().setContentsMargins(0, 7, 0, 0)
+        lay.addWidget(host)
 
         frame._pro_pitch = pitch  # type: ignore[attr-defined]
         frame._pro_btn_get = btn_get  # type: ignore[attr-defined]
@@ -2212,27 +2293,14 @@ class SettingsDialog(SteempegDialog):
         if isinstance(btn_off, QPushButton):
             btn_off.setVisible(enabled)
         if isinstance(btn_support, QPushButton):
-            btn_support.setVisible(True)
-        if isinstance(host, QLabel):
-            try:
-                from steempeg.services.kofi_remote import display_kofi_host, resolve_kofi_url
-
-                host.setText(display_kofi_host(resolve_kofi_url(refresh=False)))
-            except Exception:
-                host.setText("ko-fi.com/applejuicy23")
-
-    def _on_pro_support_kofi(self) -> None:
-        import webbrowser
-
-        from steempeg.services.kofi_remote import resolve_kofi_url
-
-        webbrowser.open(resolve_kofi_url(refresh=True, timeout=2.5))
-        self._sync_pro_promo_banner()
+            btn_support.setVisible(not self._hide_kofi)
+        if host is not None:
+            host.setVisible(not self._hide_kofi)
 
     def _on_get_steempeg_pro(self) -> None:
         from steempeg.ui.pro_unlock_dialog import ask_steempeg_pro_unlock
 
-        choice = ask_steempeg_pro_unlock(self)
+        choice = ask_steempeg_pro_unlock(self, show_kofi=not self._hide_kofi)
         if choice == "dismiss":
             return
         # Free unlock — Donate opens Ko-fi first; Cancel skips the tip.
@@ -2417,6 +2485,7 @@ class SettingsDialog(SteempegDialog):
         self._apply_controls = {
             name: widget for name, widget in vars(self).items()
             if isinstance(widget, (QComboBox, QCheckBox, QLineEdit, QSpinBox))
+            and widget is not self._chk_show_kofi
         }
         self._apply_controls.update({
             f"pane_{name}": spin for name, spin in getattr(self, "_pane_spins", {}).items()
@@ -2831,6 +2900,11 @@ class SettingsDialog(SteempegDialog):
                 continue
             if btn.objectName() == "ProPromoSupportBtn":
                 btn.setStyleSheet(_pro_kofi_support_stylesheet())
+                continue
+            if btn.objectName() == "KofiCopyLink":
+                continue
+            if btn.objectName() == "KofiHideButton":
+                btn.setStyleSheet(sec_qss + "QPushButton { padding: 0px; }")
                 continue
             if btn.objectName() == "settingsPrimaryBtn" or btn is getattr(
                 self, "_btn_save", None
