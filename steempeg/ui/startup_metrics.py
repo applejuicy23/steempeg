@@ -1,4 +1,4 @@
-"""One startup measurement: entry point to the shown, settled initial library."""
+"""Measure initial library readiness for foreground and tray launches."""
 from __future__ import annotations
 
 import logging
@@ -33,7 +33,12 @@ def valid_sample(sample) -> bool:
             and isinstance(sample.get("mode"), str)
             and sample["mode"] in ("progressive", "quick", "full", "cache")
             and sample.get("status", "ready") == "ready"
-            and math.isfinite(sample["seconds"]) and 0 <= sample["seconds"] < 86400)
+            and math.isfinite(sample["seconds"]) and 0 <= sample["seconds"] < 86400
+            # Older tray launches recorded the entire wait before the first
+            # tray Open as window_seconds. Hide those hours-long samples.
+            and not ("background" not in sample
+                     and isinstance(sample.get("window_seconds"), (int, float))
+                     and sample["window_seconds"] >= 3600))
 
 
 class StartupMeasurement(QObject):
@@ -41,6 +46,7 @@ class StartupMeasurement(QObject):
         super().__init__(app.ui)
         self.app, self.started, self.clock = app, started, clock
         self.shown = None
+        self.started_in_tray = False
         self.ready_since = None
         self.result = None
         self.timer = QTimer(self)
@@ -48,15 +54,23 @@ class StartupMeasurement(QObject):
         self.timer.timeout.connect(self.poll)
 
     def window_shown(self):
+        if self.result is not None:
+            return
         if self.shown is None:
             self.shown = self.clock() - self.started
+        if not self.timer.isActive():
+            self.timer.start()
+
+    def tray_started(self):
+        """Start the readiness timer without waiting for the first tray Open."""
+        self.started_in_tray = True
         self.timer.start()
 
     def poll(self):
         if self.result is not None:
             self.timer.stop()
             return
-        if self.shown is None:
+        if self.shown is None and not self.started_in_tray:
             return
         now = self.clock()
         if getattr(self.app, "_startup_metrics_failed", False):
@@ -64,7 +78,8 @@ class StartupMeasurement(QObject):
             self.app._startup_metrics_current = self.result
             self.timer.stop()
             return
-        if any(getattr(self.app, flag, False) for flag in _BUSY):
+        if any(getattr(self.app, flag, False) for flag in _BUSY
+               if flag != "_startup_settle_active" or not self.started_in_tray):
             self.ready_since = None
             return
         if self.ready_since is None:
@@ -75,12 +90,15 @@ class StartupMeasurement(QObject):
             return
         mode = getattr(self.app, "_startup_scan_mode", "progressive")
         self.result = dict(mode=mode, status="ready", seconds=round(now - self.started, 3),
-                           window_seconds=round(self.shown, 3),
+                           background=self.started_in_tray,
                            recorded_at=datetime.now(timezone.utc).isoformat())
+        if not self.started_in_tray:
+            self.result["window_seconds"] = round(self.shown, 3)
         self.app._startup_metrics_current = self.result
         self.timer.stop()
-        logging.info("Startup measured: mode=%s ready=%.3fs window=%.3fs",
-                     mode, self.result["seconds"], self.shown)
+        logging.info("Startup measured: mode=%s ready=%.3fs window=%s",
+                     mode, self.result["seconds"],
+                     "tray" if self.started_in_tray else f"{self.shown:.3f}s")
         folder = getattr(self.app, "cache_dir", None)
         if folder:
             result = dict(self.result)
@@ -115,12 +133,15 @@ class StartupTimeLabel(QLabel):
             self.setText("Startup time: measuring…")
         elif valid_sample(sample):
             name = MODES.get(sample.get("mode"), (str(sample.get("mode", "")),))[0]
+            if sample.get("background"):
+                name += " (tray)"
             self.setText(f"{'This' if current else 'Last'} launch: {name} · {sample['seconds']:.2f} s")
         elif isinstance(current, dict) and current.get("status") == "failed":
             self.setText("Startup time: startup did not complete")
         else:
             self.setText("Startup time: available after the next launch")
-        lines = ["From app entry to a shown, settled window and the initial library being ready.",
+        lines = ["From app entry until the initial library is ready.",
+                 "Foreground launches include showing and settling the window. Tray launches finish while hidden.",
                  "Deferred Progressive cards, thumbnails and network refreshes are excluded."]
         modes = self._saved.get("modes") or {}
         if not isinstance(modes, dict):
@@ -130,7 +151,9 @@ class StartupTimeLabel(QLabel):
             modes[current["mode"]] = current
         for key, (name, _speed, _description) in MODES.items():
             if valid_sample(modes.get(key)):
-                lines.append(f"{name}: {modes[key]['seconds']:.2f} s (last measured)")
+                entry = modes[key]
+                tray = " (tray)" if entry.get("background") else ""
+                lines.append(f"{name}{tray}: {entry['seconds']:.2f} s (last measured)")
         self.setToolTip("\n".join(lines))
 
     def showEvent(self, event):  # noqa: N802

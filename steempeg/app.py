@@ -7271,6 +7271,7 @@ def main():
 
         if args.background and window._tray.keeps_running_on_close():
             window._tray.set_first_reveal(_reveal_main_window)
+            window._startup_measurement.tray_started()
             logging.info("Background launch: main window stays hidden until opened from the tray")
         else:
             _reveal_main_window()
