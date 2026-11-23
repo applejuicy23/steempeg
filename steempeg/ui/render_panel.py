@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QFont, QGuiApplication, QIcon
 
+from steempeg.ui.ui_density import COMFORT
 from steempeg.ui.icon_assets import arrow_icon, warning_icon
 from steempeg.ui import ui_theme as ut
 from steempeg.ui.layout_defaults import (
@@ -65,7 +66,7 @@ _COMBO_W = (SETTINGS_CONTENT_WIDTH - _GRID_H - 2 * _WARN_RESERVE) // 2  # 291
 # Two export-tab combos side-by-side (no warn slots) must fit inside SETTINGS_CONTENT_WIDTH.
 _EXPORT_COMBO_W = (SETTINGS_CONTENT_WIDTH - _GRID_H) // 2
 _FIELD_LABEL_QSS = "color: #8a8a8a; font-size: 13px; font-weight: bold; background: transparent; " + _font_css()
-_TOGGLE_LABEL_QSS = "color: #cccccc; font-size: 12px; font-weight: bold; background: transparent; " + _font_css()
+
 _TITLE_QSS = "color: #ffffff; font-size: 15px; font-weight: bold; background: transparent; " + _font_css()
 _PATHBOX_QSS = ("QLabel { background-color: #353535; border-radius: 10px; padding: 8px 12px;"
                 " color: #b29ae7; font-size: 11px; font-weight: bold; font-family: 'Consolas', monospace; }")
@@ -694,18 +695,41 @@ def _custom_field(ui, label, combo, input_attr, warn_attr, unit):
     return box
 
 
+def _match_settings_value_font(widget, combo):
+    """Copy the resolved combo face after platform and density styling."""
+    combo.ensurePolished()
+    font = combo.font()
+    selector = widget.metaObject().className()
+    rule = (f"{selector} {{ font-family: {tok.FONT_APP}; "
+            f"font-size: {font.pixelSize()}px; font-weight: bold; }}")
+    sheet = widget.styleSheet()
+    if "{" not in sheet:
+        sheet = f"{selector} {{ {sheet} }}"
+    widget.setFont(font)
+    widget.setStyleSheet(sheet + rule)
+
+
 def _toggle_row(toggle, text):
-    row, _ = _toggle_row_with_caption(toggle, text, _TOGGLE_LABEL_QSS)
+    row, _ = _toggle_row_with_caption(toggle, text)
     return row
 
 
-def _toggle_row_with_caption(toggle, text, stylesheet):
+def _style_toggle_caption(caption, size):
+    caption.setFont(tok.ui_qfont(pixel_size=size, weight=QFont.Weight.Bold))
+    caption.setStyleSheet(
+        f"QLabel#settingsToggleCaption {{ color: #cccccc; background: transparent; "
+        f"font-family: {tok.FONT_APP}; font-size: {size}px; font-weight: bold; }}"
+        " QLabel#settingsToggleCaption:disabled { color: #5c5c5c; }"
+    )
+
+
+def _toggle_row_with_caption(toggle, text):
     row = QHBoxLayout()
     row.setSpacing(10)
     row.addWidget(toggle)
     caption = QLabel(text)
-    caption.setFont(tok.ui_qfont(pixel_size=12, weight=QFont.Weight.Bold))
-    caption.setStyleSheet(stylesheet)
+    caption.setObjectName("settingsToggleCaption")
+    _style_toggle_caption(caption, COMFORT.footer_font)
     row.addWidget(caption)
     row.addStretch()
     return row, caption
@@ -789,10 +813,6 @@ def restyle_video_page(ui):
     root.addStretch()
 
 
-_PRO_CAPTION_QSS = (
-    "QLabel { color: #cccccc; font-size: 12px; font-weight: bold; background: transparent; "
-    + _font_css() + " } QLabel:disabled { color: #5c5c5c; }"
-)
 _PRO_FIELD_LABEL_QSS = (
     "QLabel { color: #8a8a8a; font-size: 13px; font-weight: bold; background: transparent; "
     + _font_css() + " } QLabel:disabled { color: #555555; }"
@@ -800,7 +820,7 @@ _PRO_FIELD_LABEL_QSS = (
 
 
 def _pro_toggle_row(toggle: ToggleSwitch, text: str) -> tuple[QHBoxLayout, QLabel]:
-    return _toggle_row_with_caption(toggle, text, _PRO_CAPTION_QSS)
+    return _toggle_row_with_caption(toggle, text)
 
 
 def _build_pro_encoding_section(ui) -> QWidget:
@@ -1402,6 +1422,9 @@ def apply_settings_panel_density(ui, dense) -> None:
         ss = label.styleSheet() or ""
         if "font-size:" not in ss:
             continue
+        if name == "settingsToggleCaption":
+            _style_toggle_caption(label, field_font)
+            continue
         # Keep monospace path chips / purple accents, just retarget size.
         if "Consolas" in ss or "monospace" in ss.lower():
             new_size = label_font
@@ -1481,29 +1504,9 @@ def apply_settings_panel_density(ui, dense) -> None:
         fnt.setPixelSize(field_font)
         dest.setFont(fnt)
 
-    # Preset create chrome (Create… + Save as new). Row actions live on each list item.
-    _preset_faces = (
-        ("btn_preset_create", "#303030", "#f0f0f0", "#4a4a4a", "#3a3a3a", "#6b5a8e", "#262626"),
-        ("btn_preset_save", "#4a3d66", "#f0ecff", "#6b5a8e", "#5a4d76", "#b29ae7", "#3a324a"),
+    _style_preset_create_buttons(
+        ui, line_h=line_h, border=border, btn_r=btn_r, field_font=field_font, ph=ph
     )
-    for attr, bg, fg, brd, hover_bg, hover_brd, pressed_bg in _preset_faces:
-        btn = getattr(ui, attr, None)
-        if btn is None:
-            continue
-        btn.setFixedHeight(line_h)
-        btn.setStyleSheet(
-            f"QPushButton {{ background-color: {bg}; color: {fg};"
-            f" border: {border}px solid {brd}; border-radius: {btn_r}px;"
-            f" font-family: {tok.FONT_APP};"
-            f" font-weight: bold; font-size: {field_font}px; padding: 0px {ph}px; }}"
-            f" QPushButton:hover {{ background-color: {hover_bg}; border: {border}px solid {hover_brd}; }}"
-            f" QPushButton:pressed {{ background-color: {pressed_bg}; border: {border}px solid {hover_brd}; }}"
-        )
-        fnt = btn.font()
-        fnt = tok.pin_ui_font(fnt)
-        fnt.setBold(True)
-        fnt.setPixelSize(field_font)
-        btn.setFont(fnt)
 
     for path_row in root.findChildren(QFrame, "outputPathRow"):
         lay = path_row.layout()
@@ -1797,6 +1800,36 @@ class PresetSectionHeader(QWidget):
         return self.sizeHint()
 
 
+def _style_preset_create_buttons(
+    ui, *, line_h: int = 34, border: int = 2, btn_r: int = 12,
+    field_font: int = 12, ph: int = 10,
+) -> None:
+    """Use the compact Presets button faces at creation and after density changes."""
+    from steempeg.ui.pro_appearance import set_accent_stylesheet
+
+    preset_faces = (
+        ("btn_preset_create", "#303030", "#f0f0f0", "#4a4a4a", "#3a3a3a", "#6b5a8e", "#262626"),
+        ("btn_preset_save", "#4a3d66", "#f0ecff", "#6b5a8e", "#5a4d76", "#b29ae7", "#3a324a"),
+    )
+    for attr, bg, fg, brd, hover_bg, hover_brd, pressed_bg in preset_faces:
+        btn = getattr(ui, attr, None)
+        if btn is None:
+            continue
+        btn.setFixedHeight(line_h)
+        set_accent_stylesheet(
+            btn,
+            f"QPushButton {{ background-color: {bg}; color: {fg};"
+            f" border: {border}px solid {brd}; border-radius: {btn_r}px;"
+            f" font-family: {tok.FONT_APP};"
+            f" font-weight: bold; font-size: {field_font}px; padding: 0px {ph}px; }}"
+            f" QPushButton:hover {{ background-color: {hover_bg}; border: {border}px solid {hover_brd}; }}"
+            f" QPushButton:pressed {{ background-color: {pressed_bg}; border: {border}px solid {hover_brd}; }}"
+            " QPushButton:disabled { color: #777777; border-color: #3a3a3a;"
+            " background-color: #2a2a2a; }"
+        )
+        _match_settings_value_font(btn, ui.combo_encoder)
+
+
 def restyle_presets_page(ui, app) -> None:
     """Presets tab: create strip + searchable expandable list (row actions)."""
     page = ensure_presets_tab(ui)
@@ -1843,7 +1876,6 @@ def restyle_presets_page(ui, app) -> None:
 
     btn_save = QPushButton("Save as new")
     btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
-    btn_save.setStyleSheet(ut.about_accent_button_stylesheet())
     btn_save.setToolTip(
         "Snapshot the current Video / Audio / Export panel as a named preset."
     )
@@ -1851,11 +1883,11 @@ def restyle_presets_page(ui, app) -> None:
 
     btn_create = QPushButton("Create…")
     btn_create.setCursor(Qt.CursorShape.PointingHandCursor)
-    btn_create.setStyleSheet(ut.about_secondary_button_stylesheet())
     btn_create.setToolTip(
         "Open the preset mini-editor — build a recipe without changing the live panel."
     )
     ui.btn_preset_create = btn_create
+    _style_preset_create_buttons(ui)
 
     name_block = QWidget()
     name_lay = QVBoxLayout(name_block)

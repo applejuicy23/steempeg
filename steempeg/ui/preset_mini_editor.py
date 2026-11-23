@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import re
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListView,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -82,66 +83,78 @@ _SECTION_QSS = (
     f" background: transparent; font-family: {tok.FONT_APP};"
 )
 
-class _PresetPopupGuard(QObject):
-    """Dismiss open combo lists when the editor loses the foreground."""
+class _PresetCombo(QComboBox):
+    """Keep mouse input and the list inside the same modal window."""
 
-    def __init__(self, editor):
-        super().__init__(editor)
-        self._editor = editor
-        self._closing = False
-        editor.installEventFilter(self)
-        for combo in editor.findChildren(QComboBox):
-            combo.view().window().installEventFilter(self)
-        QApplication.instance().applicationStateChanged.connect(self._application_state_changed)
+    _choices = None
 
-    def _application_state_changed(self, state):
-        if state != Qt.ApplicationState.ApplicationActive:
-            self._close_popups()
-
-    def _close_popups(self):
-        editor = getattr(self, "_editor", None)
-        if editor is None or getattr(self, "_closing", False):
+    def showPopup(self):
+        if self._choices is not None:
+            self.hidePopup()
             return
-        self._closing = True
-        try:
-            for combo in editor.findChildren(QComboBox):
-                if combo.view().isVisible():
-                    combo.hidePopup()
-        finally:
-            self._closing = False
+        from steempeg.ui.widgets.combo_chrome import combo_popup_item_rules
+        from steempeg.ui.pro_appearance import set_accent_stylesheet
 
-    def _close_if_away(self):
-        if getattr(self, "_editor", None) is None:
-            return
-        app = QApplication.instance()
-        if app.applicationState() != Qt.ApplicationState.ApplicationActive:
-            self._close_popups()
-            return
-        popup = app.activePopupWidget()
-        if popup is not None and any(
-            combo.view().window() is popup for combo in self._editor.findChildren(QComboBox)
-        ):
-            return
-        if app.activeWindow() is not self._editor:
-            self._close_popups()
+        host = self.window()
+        choices = QListView(host)
+        self._choices = choices
+        choices.setModel(self.model())
+        choices.setFont(self.font())
+        set_accent_stylesheet(choices, combo_popup_item_rules().replace(
+            "QComboBox QAbstractItemView", "QListView"
+        ))
+        choices.setCurrentIndex(self.model().index(self.currentIndex(), self.modelColumn()))
+        choices.clicked.connect(self._choose)
+        choices.activated.connect(self._choose)
+        origin = self.mapTo(host, QPoint(0, 0))
+        below = host.height() - origin.y() - self.height()
+        choices.ensurePolished()
+        wanted = sum(choices.sizeHintForRow(i) for i in range(self.count())) + 16
+        upwards = wanted > below and origin.y() > below
+        height = min(wanted, origin.y() if upwards else below)
+        y = origin.y() - height if upwards else origin.y() + self.height()
+        choices.setGeometry(origin.x(), y, self.width(), height)
+        choices.show()
+        choices.raise_()
+        choices.setFocus()
+        choices.scrollTo(choices.currentIndex())
+        QApplication.instance().installEventFilter(self)
 
-    def eventFilter(self, obj, event):  # noqa: N802
-        if getattr(self, "_editor", None) is None:
-            return False
-        kind = event.type()
-        if kind == QEvent.Type.ApplicationDeactivate:
-            self._close_popups()
-        elif obj is self._editor and kind in (QEvent.Type.Hide, QEvent.Type.Close):
-            self._close_popups()
-        elif kind == QEvent.Type.WindowDeactivate:
-            if obj is self._editor:
-                # Opening a Qt.Popup can itself deactivate its dialog. Wait for
-                # the new active window before deciding whether it left the app.
-                QTimer.singleShot(0, self._close_if_away)
-            elif any(combo.view().isVisible() and obj is combo.view().window()
-                     for combo in self._editor.findChildren(QComboBox)):
-                self._close_popups()
-        return False
+    def _choose(self, index):
+        if self._choices is None or not index.isValid():
+            return
+        if not index.flags() & Qt.ItemFlag.ItemIsEnabled:
+            return
+        row = index.row()
+        self.hidePopup()
+        self.setCurrentIndex(row)
+        self.activated.emit(row)
+        self.textActivated.emit(self.currentText())
+
+    def hidePopup(self):
+        choices = self._choices
+        if choices is not None:
+            self._choices = None
+            QApplication.instance().removeEventFilter(self)
+            choices.hide()
+            choices.deleteLater()
+            self.setFocus()
+        super().hidePopup()
+
+    def eventFilter(self, obj, event):
+        choices = self._choices
+        if choices is not None:
+            kind = event.type()
+            if kind == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+                self.hidePopup()
+                return True
+            if kind == QEvent.Type.MouseButtonPress and isinstance(obj, QWidget):
+                if obj is not choices and not choices.isAncestorOf(obj):
+                    self.hidePopup()
+                    return obj is self
+            if kind in (QEvent.Type.WindowDeactivate, QEvent.Type.Hide) and obj is self.window():
+                self.hidePopup()
+        return super().eventFilter(obj, event)
 
 
 def _settings_combo_line_h(dense=COMFORT) -> int:
@@ -320,12 +333,12 @@ class PresetMiniEditor(SteempegDialog):
         # --- Video (2-col grid like Video Settings) ---
         root.addWidget(_section_title("Video", 1))
 
-        self._quality = QComboBox()
+        self._quality = _PresetCombo()
         self._quality.addItem(original_quality_label(None), "original")
         for label, height in build_quality_presets(4320):
             self._quality.addItem(label, height)
 
-        self._fallback = QComboBox()
+        self._fallback = _PresetCombo()
         self._fallback.addItem("Original (always last resort)", _FALLBACK_ORIGINAL)
         for label, _height in build_quality_presets(4320):
             self._fallback.addItem(f"Then {label}", label)
@@ -334,15 +347,15 @@ class PresetMiniEditor(SteempegDialog):
             "try this instead. Original is always the final fallback."
         )
 
-        self._bitrate = QComboBox()
+        self._bitrate = _PresetCombo()
         for level in _BITRATE_LEVELS:
             self._bitrate.addItem(level, level)
 
-        self._fps = QComboBox()
+        self._fps = _PresetCombo()
         for label, data in _FPS_CHOICES:
             self._fps.addItem(label, data)
 
-        self._codec = QComboBox()
+        self._codec = _PresetCombo()
         optional = set(capabilities.detect_optional_video_codecs())
         for item in VIDEO_CODEC_ITEMS:
             if item == "AV1" and "AV1" not in optional:
@@ -351,14 +364,14 @@ class PresetMiniEditor(SteempegDialog):
                 continue
             self._codec.addItem(item)
 
-        self._encoder = QComboBox()
+        self._encoder = _PresetCombo()
         encoders = capabilities.detect_supported_encoders()
         for display, codec in encoders:
             self._encoder.addItem(display, codec)
         if self._encoder.count() == 0:
             self._encoder.addItem("CPU (Software)", "libx264")
 
-        self._speed = QComboBox()
+        self._speed = _PresetCombo()
         for opt in ENCODE_SPEED_OPTIONS:
             self._speed.addItem(opt.label, opt.id)
 
@@ -386,11 +399,11 @@ class PresetMiniEditor(SteempegDialog):
         self._mute.setAccessibleName("Disable Audio (Video Only)")
         root.addLayout(_toggle_row(self._mute, "Disable Audio (Video Only)"))
 
-        self._audio_fmt = QComboBox()
+        self._audio_fmt = _PresetCombo()
         for fmt in AUDIO_FORMATS:
             self._audio_fmt.addItem(fmt)
 
-        self._audio_br = QComboBox()
+        self._audio_br = _PresetCombo()
         for kbps in (96, 128, 160, 192):
             self._audio_br.addItem(f"{kbps} kbps", kbps)
         self._audio_br.setToolTip(
@@ -412,7 +425,7 @@ class PresetMiniEditor(SteempegDialog):
         # --- Export ---
         root.addWidget(_section_title("Export", 3))
 
-        self._container = QComboBox()
+        self._container = _PresetCombo()
         for c in CONTAINERS:
             self._container.addItem(c)
 
@@ -427,13 +440,13 @@ class PresetMiniEditor(SteempegDialog):
 
         self._pro_on = pro_enabled(app)
         self._pro_carry: dict = {}
-        self._pro_rate = QComboBox()
+        self._pro_rate = _PresetCombo()
         for key, label in pro.RATE_CONTROL_OPTIONS:
             self._pro_rate.addItem(label, key)
-        self._pro_quality = QComboBox()
-        self._pro_preset = QComboBox()
-        self._pro_tune = QComboBox()
-        self._pro_keyint = QComboBox()
+        self._pro_quality = _PresetCombo()
+        self._pro_preset = _PresetCombo()
+        self._pro_tune = _PresetCombo()
+        self._pro_keyint = _PresetCombo()
         for sec, label in pro.KEYINT_CHOICES:
             self._pro_keyint.addItem(label, sec)
         self._pro_ten_bit = ToggleSwitch()
@@ -532,7 +545,10 @@ class PresetMiniEditor(SteempegDialog):
         self._sync_original_locks()
         self._sync_audio_enabled()
         install_no_wheel_value_filter(self)
-        self._popup_guard = _PresetPopupGuard(self)
+        from steempeg.ui.render_panel import _match_settings_value_font
+
+        for label in self.findChildren(QLabel, "settingsToggleCaption"):
+            _match_settings_value_font(label, self._encoder)
 
     def _sync_original_locks(self) -> None:
         is_orig = self._quality.currentData() == "original"
@@ -858,6 +874,9 @@ def open_preset_mini_editor(
         seed=seed,
         parent=getattr(app, "ui", None),
     )
-    if dlg.exec() != dlg.DialogCode.Accepted:
-        return None
-    return getattr(dlg, "_saved_name", None)
+    try:
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return None
+        return getattr(dlg, "_saved_name", None)
+    finally:
+        dlg.deleteLater()
