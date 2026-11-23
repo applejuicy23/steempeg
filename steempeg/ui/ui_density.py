@@ -348,21 +348,16 @@ def _ppi_pixel_factor(window_width: int, ppi_f: float) -> float:
 
 
 def density_for_width(window_width: int, *, widget=None, screen=None) -> UiDensity:
-    """Chrome density: width chooses compact vs comfort; PPI mildly scales pixels.
+    """Use compact chrome only on displays below 1600 physical pixels wide."""
+    from steempeg.ui.screen_metrics import _qscreen_for, chrome_ppi_scale
 
-    Two axes (do not multiply both on 1080p):
-
-    * Small window (Deck / 1280 / half-screen) → ``shell_layout_scale`` toward
-      compact. FHD-wide (≥1920) is always comfort ``t``.
-    * Coarse pixels (big-inch FHD) → ``chrome_ppi_scale`` on DIP sizes only,
-      damped when the window is already wide.
-    """
+    display = _qscreen_for(widget, screen)
+    if display is not None and round(display.geometry().width() * display.devicePixelRatio()) >= 1600:
+        return COMFORT
     t = shell_layout_scale(window_width, widget=widget, screen=screen)
     if int(window_width or 0) >= FHD_SHELL_WIDTH:
         t = 1.0
     dense = lerp_density(t)
-    from steempeg.ui.screen_metrics import chrome_ppi_scale
-
     return scale_density_pixels(
         dense, _ppi_pixel_factor(window_width, chrome_ppi_scale(widget, screen))
     )

@@ -105,12 +105,33 @@ class MainWindow(_WindowBase):
 
     def showEvent(self, event):
         refresh_dwm_chrome(self)
-        host = self._app_host
-        if host is not None and hasattr(host, "on_main_window_resized"):
-            host.on_main_window_resized()
+        handle = self.windowHandle()
+        if handle is not None and handle is not getattr(self, "_density_window", None):
+            self._density_window = handle
+            handle.screenChanged.connect(self._watch_density_screen)
+            self._watch_density_screen(handle.screen())
+        else:
+            self._refresh_screen_density()
         QTimer.singleShot(0, lambda: refresh_traffic_lights_under_cursor(self))
         QTimer.singleShot(0, _restore_shell_splitter_cursors)
         super().showEvent(event)
+
+    def _watch_density_screen(self, screen):
+        previous = getattr(self, "_density_screen", None)
+        if previous is not None and previous is not screen:
+            try:
+                previous.geometryChanged.disconnect(self._refresh_screen_density)
+            except RuntimeError:
+                pass  # Qt already destroyed a disconnected display.
+        if screen is not None and screen is not previous:
+            screen.geometryChanged.connect(self._refresh_screen_density)
+        self._density_screen = screen
+        self._refresh_screen_density()
+
+    def _refresh_screen_density(self):
+        host = self._app_host
+        if host is not None and hasattr(host, "on_main_window_resized"):
+            host.on_main_window_resized()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
