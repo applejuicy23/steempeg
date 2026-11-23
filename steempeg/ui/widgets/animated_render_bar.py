@@ -9,11 +9,13 @@ from PySide6.QtCore import Qt, QTimer, QRectF
 from PySide6.QtGui import QColor, QLinearGradient, QPainter
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
+from steempeg.render.queue import JobStatus, STATUS_COLORS
 from steempeg.ui.pro_appearance import accent_qcolor, render_bar_accent, visible_accent
 
 _TRACK = QColor("#414141")
 _GRADIENT_START = QColor("#6b5a8e")
 _GRADIENT_END = QColor("#b29ae7")
+_RENDERING = QColor(STATUS_COLORS[JobStatus.RENDERING])
 _SHIMMER = QColor(255, 255, 255, 72)
 
 _STATE_FILL = {
@@ -202,13 +204,13 @@ class AnimatedRenderBar(QWidget):
         painter.end()
 
     def _gradient_colors(self) -> tuple[QColor, QColor]:
-        if self._state == "preparing":
+        if self._state == "preparing" or (self._render_dashboard and self._state == "busy"):
             return _GRADIENT_START, _GRADIENT_END
         if self._state == "rendering" and self._render_dashboard:
             color = render_bar_accent()
             if color is not None:
                 return visible_accent(color.darker(130), _TRACK, minimum=3.0), color
-            return _GRADIENT_START, _GRADIENT_END
+            return _RENDERING, _RENDERING
         return accent_qcolor(_GRADIENT_START), accent_qcolor(_GRADIENT_END)
 
     def _segment_gradient(self, x: float, seg: float) -> QLinearGradient:
