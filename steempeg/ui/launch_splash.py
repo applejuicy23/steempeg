@@ -388,7 +388,7 @@ class _SplashAuthor(QWidget):
 class _SplashRepoMark(QWidget):
     """Top-right: GitHub mark + Ko-fi tip (same size, stacked)."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, hide_kofi: bool = False):
         super().__init__(parent)
         self.setStyleSheet("background: transparent; border: none;")
         lay = QVBoxLayout(self)
@@ -408,6 +408,8 @@ class _SplashRepoMark(QWidget):
             logging.debug("Splash GitHub mark failed", exc_info=True)
         lay.addWidget(self._gh, 0, Qt.AlignmentFlag.AlignRight)
 
+        if hide_kofi:
+            return
         self._kofi = _LinkLabel(_KOFI_URL)
         try:
             from steempeg.services.kofi_remote import resolve_kofi_url
@@ -432,7 +434,7 @@ class _SplashRepoMark(QWidget):
 class LaunchSplash(QWidget):
     """Frameless centered splash card."""
 
-    def __init__(self, parent=None, *, pro: bool = False):
+    def __init__(self, parent=None, *, pro: bool = False, hide_kofi: bool = False):
         super().__init__(parent)
         self.setObjectName("SteempegLaunchSplash")
         self.setWindowFlags(
@@ -564,7 +566,7 @@ class LaunchSplash(QWidget):
         )
 
         self._author = _SplashAuthor(self, pro=self._pro)
-        self._repo = _SplashRepoMark(self)
+        self._repo = _SplashRepoMark(self, hide_kofi=hide_kofi)
         self._place_credits()
 
         self._pct_sync = QTimer(self)
@@ -667,7 +669,9 @@ def _quiet_splash_frame(splash: LaunchSplash) -> None:
         logging.debug("Splash frame quiet failed", exc_info=True)
 
 
-def show_launch_splash(*, force: bool = False, pro: bool | None = None) -> LaunchSplash | None:
+def show_launch_splash(
+    *, force: bool = False, pro: bool | None = None, hide_kofi: bool | None = None
+) -> LaunchSplash | None:
     global _splash
     if _splash_disabled() and not force:
         return None
@@ -684,7 +688,14 @@ def show_launch_splash(*, force: bool = False, pro: bool | None = None) -> Launc
             pro = resolve_steempeg_pro()
         except Exception:
             pro = False
-    splash = LaunchSplash(pro=bool(pro))
+    if hide_kofi is None:
+        from steempeg.infra.cache import read_json
+        from steempeg.infra.paths import get_save_directory
+        from steempeg.ui.settings_prefs import load_hide_kofi
+
+        settings_path = os.path.join(get_save_directory(), "cache", "settings.json")
+        hide_kofi = load_hide_kofi(read_json(settings_path))
+    splash = LaunchSplash(pro=bool(pro), hide_kofi=hide_kofi)
     splash.center_on_screen()
     splash.set_progress(0, "Starting…")
     splash.show()

@@ -6866,6 +6866,8 @@ def main():
     from steempeg.infra.cache import read_json
 
     settings = read_json(os.path.join(get_save_directory(), "cache", "settings.json")) or {}
+    from steempeg.ui.settings_prefs import load_hide_kofi
+
     apply_pro_appearance(resolve_steempeg_pro(settings), settings)
 
     _app_icon = app_window_icon()
@@ -6907,7 +6909,7 @@ def main():
         try:
             from steempeg.ui.launch_splash import show_launch_splash
 
-            show_launch_splash()
+            show_launch_splash(hide_kofi=load_hide_kofi(settings))
             _launch_splash_progress(4, "Starting Steempeg…")
         except Exception:
             logging.debug("Launch splash failed to open", exc_info=True)
@@ -7185,13 +7187,14 @@ def main():
                 schedule_settings_warmup(window)
 
             QTimer.singleShot(1000, _prepare_settings_when_idle)
-            try:
-                from steempeg.services.kofi_remote import refresh_kofi_url_async
+            if not load_hide_kofi(settings):
+                try:
+                    from steempeg.services.kofi_remote import refresh_kofi_url_async
 
-                # Quiet Pages pull so Donate Me / PRO use the latest tip slug.
-                QTimer.singleShot(2500, refresh_kofi_url_async)
-            except Exception:
-                logging.debug("Ko-fi meta refresh schedule failed", exc_info=True)
+                    # Quiet Pages pull so Donate Me / PRO use the latest tip slug.
+                    QTimer.singleShot(2500, refresh_kofi_url_async)
+                except Exception:
+                    logging.debug("Ko-fi meta refresh schedule failed", exc_info=True)
             try:
                 from PySide6.QtCore import QEventLoop
 
