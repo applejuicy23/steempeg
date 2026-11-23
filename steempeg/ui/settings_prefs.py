@@ -653,6 +653,14 @@ def load_hide_settings_hints(settings: dict | None) -> bool:
     return normalize_hide_settings_hints(settings.get(KEY_HIDE_SETTINGS_HINTS))
 
 
+KEY_HIDE_KOFI = "hide_kofi"
+
+
+def load_hide_kofi(settings: dict | None) -> bool:
+    """Hide Ko-fi links and promotions throughout the client."""
+    return (settings or {}).get(KEY_HIDE_KOFI) is True
+
+
 # ----- Tray / background mode -----
 
 # Red close button hides the main window to the tray instead of quitting.
