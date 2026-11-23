@@ -2428,10 +2428,18 @@ def about_accent_button_stylesheet() -> str:
 """
 
 
+def _about_pro_accent(card_background: str, *, minimum: float = 4.5):
+    from PySide6.QtGui import QColor
+
+    from steempeg.ui.pro_appearance import pro_brand_color, visible_accent
+
+    return visible_accent(pro_brand_color(), QColor(card_background), minimum=minimum)
+
+
 def about_dialog_stylesheet(*, pro: bool | None = None) -> str:
     """About frameless card — Default legacy plate; TrueDark elevated tokens.
 
-    ``pro`` — Steempeg PRO brand chrome (red title / heart accents).
+    ``pro`` — use Steempeg PRO accent colors for the title and heart.
     """
     if pro is None:
         try:
@@ -2443,9 +2451,15 @@ def about_dialog_stylesheet(*, pro: bool | None = None) -> str:
     pro = bool(pro)
 
     c = _frameless_card_dialog_colors()
-    # Warm red sibling to free violet — same tokens as ProBadge / splash wash.
-    title = "#e85a5a" if pro else c["title"]
-    heart_hover = "#f08080" if pro else "#d4c4f5"
+    title = heart = c["title"]
+    heart_hover = "#d4c4f5"
+    if pro:
+        from PySide6.QtGui import QColor
+
+        # ARGB is already resolved here. Leave it out of the legacy violet QSS pass.
+        title = _about_pro_accent(c["card_bg"], minimum=3).name(QColor.NameFormat.HexArgb)
+        heart = _about_pro_accent(c["card_bg"]).name(QColor.NameFormat.HexArgb)
+        heart_hover = _about_pro_accent(c["card_bg"], minimum=5.5).name(QColor.NameFormat.HexArgb)
     # Do not add Linux min-height/padding here. Qt paints the QSS font outside
     # the layout box, which is what put the logo on "Steempeg" and the hairline
     # through FFmpeg/PyAV/MPV. Heights are pinned in code after polish.
@@ -2470,7 +2484,7 @@ def about_dialog_stylesheet(*, pro: bool | None = None) -> str:
         letter-spacing: 0.4px;
     }}
     QLabel#AboutThanksHeart {{
-        color: {title};
+        color: {heart};
         font-size: 13px;
         font-weight: bold;
         padding-bottom: 1px;
@@ -2945,7 +2959,8 @@ def about_dialog_link_style(*, pro: bool | None = None) -> str:
         except Exception:
             pro = False
     if pro:
-        return "color:#e85a5a; text-decoration:none;"
+        color = _about_pro_accent(_frameless_card_dialog_colors()["card_bg"]).name()
+        return f"color:{color}; text-decoration:none;"
     return "color:#b29ae7; text-decoration:none;"
 
 

@@ -25,6 +25,7 @@ from PySide6.QtGui import (
     QLinearGradient,
     QPainter,
     QPainterPath,
+    QPalette,
     QPen,
     QPixmap,
 )
@@ -38,20 +39,17 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.ui import design_tokens as tok
+from steempeg.ui.pro_appearance import pro_brand_color, visible_accent
 from steempeg.version import APP_VERSION_STR
 
 _BG = "#2a2a2a"
 _BG_EDGE = QColor("#1a1a1a")
 _BG_EDGE_PURPLE = QColor("#2a2240")
-_BG_EDGE_RED = QColor("#3a1c1c")
 _BG_MID = QColor(_BG)
-_BG_MID_PRO = QColor("#322222")
 _BG_BOTTOM = QColor("#222222")
 _TRACK = QColor("#3a3a3a")
 _FILL_A = QColor("#6b5a8e")
 _FILL_B = QColor("#b29ae7")
-_FILL_A_PRO = QColor("#8a3a3a")
-_FILL_B_PRO = QColor("#e85a5a")
 _SHIMMER = QColor(255, 255, 255, 72)
 _LERP = 0.28
 # Cap how far the visible % can jump per frame → reads 10,11,12… not 10→30.
@@ -76,7 +74,6 @@ _HANDLE = "@applejuicy23"
 _GH_MARK = "github.jpg"
 _KOFI_MARK = "kofi.png"
 _AVATAR = "applejuicy23.png"
-_HANDLE_PRO = "#e85a5a"
 # Windows Segoe paints the status midline a hair below a geometric 12px ring.
 _SPINNER_WIN_NUDGE_Y = 1.5 if sys.platform == "win32" else 0.0
 
@@ -130,6 +127,12 @@ def _lerp_color(a: QColor, b: QColor, t: float) -> QColor:
     )
 
 
+def _set_splash_ink(label: QLabel, color: QColor) -> None:
+    palette = label.palette()
+    palette.setColor(QPalette.ColorRole.WindowText, color)
+    label.setPalette(palette)
+
+
 def _soft_ceiling_for(percent: float) -> float:
     pct = max(0.0, min(100.0, float(percent)))
     for step, _status in _SIM_SCRIPT:
@@ -145,7 +148,11 @@ class _SplashProgressBar(QWidget):
         super().__init__(parent)
         self.setFixedHeight(10)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._pro = bool(pro)
+        self._fill_a, self._fill_b = _FILL_A, _FILL_B
+        if pro:
+            accent = pro_brand_color()
+            self._fill_a = visible_accent(_lerp_color(_TRACK, accent, 0.7), _TRACK, minimum=3)
+            self._fill_b = visible_accent(accent, _TRACK, minimum=3)
         self._display = 0.0
         self._target = 0.0
         self._soft_ceiling = 8.0
@@ -231,12 +238,8 @@ class _SplashProgressBar(QWidget):
         fill_w = max(r.height(), r.width() * frac)
         fr = QRectF(r.left(), r.top(), fill_w, r.height())
         grad = QLinearGradient(fr.topLeft(), fr.topRight())
-        if self._pro:
-            grad.setColorAt(0.0, _FILL_A_PRO)
-            grad.setColorAt(1.0, _FILL_B_PRO)
-        else:
-            grad.setColorAt(0.0, _FILL_A)
-            grad.setColorAt(1.0, _FILL_B)
+        grad.setColorAt(0.0, self._fill_a)
+        grad.setColorAt(1.0, self._fill_b)
         p.setBrush(grad)
         p.drawRoundedRect(fr, radius, radius)
         if self._busy or frac < 0.995:
@@ -264,7 +267,7 @@ class _SplashBusySpinner(QWidget):
         h = max(_SPINNER_SIZE, int(box_h or _SPINNER_SIZE))
         self.setFixedSize(_SPINNER_SIZE, h)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self._pro = bool(pro)
+        self._ink = visible_accent(pro_brand_color(), _BG_BOTTOM, minimum=3) if pro else _FILL_B
         self._angle = 0
         self._step = _SPINNER_STEP
         self._tick = QTimer(self)
@@ -300,7 +303,7 @@ class _SplashBusySpinner(QWidget):
         x = (float(self.width()) - side) / 2.0
         y = (float(self.height()) - side) / 2.0 + _SPINNER_WIN_NUDGE_Y
         r = QRectF(x, y, side, side).adjusted(1.5, 1.5, -1.5, -1.5)
-        pen = QPen(_FILL_B_PRO if self._pro else _FILL_B)
+        pen = QPen(self._ink)
         pen.setWidthF(1.75)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         p.setPen(pen)
@@ -351,7 +354,7 @@ def _round_avatar(size: int) -> QPixmap:
 
 
 class _SplashAuthor(QWidget):
-    """Top-left: avatar + @handle (purple stock · red when PRO)."""
+    """Top-left: avatar and profile link."""
 
     def __init__(self, parent=None, *, pro: bool = False):
         super().__init__(parent)
@@ -376,10 +379,9 @@ class _SplashAuthor(QWidget):
         f.setPointSize(10)
         f.setWeight(QFont.Weight.Bold)
         self._handle.setFont(f)
-        ink = _HANDLE_PRO if pro else tok.ACCENT_PRIMARY
-        self._handle.setStyleSheet(
-            f"color: {ink}; background: transparent; border: none;"
-        )
+        ink = visible_accent(pro_brand_color(), QColor("#454545")) if pro else _FILL_B
+        self._handle.setStyleSheet("background: transparent; border: none;")
+        _set_splash_ink(self._handle, ink)
         lay.addWidget(self._handle)
 
 
@@ -444,6 +446,7 @@ class LaunchSplash(QWidget):
         self.setFixedSize(520, 300)
         self._wash_t = 0.0
         self._pro = bool(pro)
+        self._wash_accent = visible_accent(pro_brand_color(), _BG_EDGE, minimum=2) if pro else None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(36, 36, 36, 28)
@@ -529,7 +532,8 @@ class LaunchSplash(QWidget):
         self._bar = _SplashProgressBar(pro=self._pro)
         root.addWidget(self._bar)
 
-        accent = "#e85a5a" if self._pro else tok.ACCENT_PRIMARY
+        ink = visible_accent(pro_brand_color(), _BG_BOTTOM) if self._pro else _FILL_B
+        _set_splash_ink(self._percent, ink)
         self.setStyleSheet(
             f"""
             QWidget#SteempegLaunchSplash {{
@@ -552,7 +556,6 @@ class LaunchSplash(QWidget):
                 border: none;
             }}
             QLabel#LaunchSplashPercent {{
-                color: {accent};
                 background: transparent;
                 border: none;
                 font-weight: bold;
@@ -589,9 +592,9 @@ class LaunchSplash(QWidget):
         r = QRectF(self.rect())
         path = QPainterPath()
         path.addRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 14, 14)
-        if self._pro:
-            top = _lerp_color(_BG_EDGE, _BG_EDGE_RED, self._wash_t)
-            mid = _lerp_color(_BG_MID, _BG_MID_PRO, self._wash_t * 0.55)
+        if self._wash_accent is not None:
+            top = _lerp_color(_BG_EDGE, self._wash_accent, self._wash_t * 0.22)
+            mid = _lerp_color(_BG_MID, self._wash_accent, self._wash_t * 0.06)
         else:
             top = _lerp_color(_BG_EDGE, _BG_EDGE_PURPLE, self._wash_t)
             mid = _lerp_color(_BG_MID, QColor("#2c2836"), self._wash_t * 0.55)

@@ -112,6 +112,55 @@ def pro_accents_enabled() -> bool:
     return _interface_color is not None
 
 
+def pro_brand_color() -> QColor:
+    return QColor(_interface_color or DEFAULT_PRO_ACCENT)
+
+
+def _luminance(color: QColor) -> float:
+    def linear(channel: float) -> float:
+        return channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
+
+    return (
+        0.2126 * linear(color.redF())
+        + 0.7152 * linear(color.greenF())
+        + 0.0722 * linear(color.blueF())
+    )
+
+
+def contrast_ink(background: QColor) -> QColor:
+    """Pick black or white, whichever reads better on a solid accent."""
+    light = _luminance(background) + 0.05
+    return QColor("#000000" if light / 0.05 >= 1.05 / light else "#ffffff")
+
+
+def visible_accent(color: QColor, background: QColor, *, minimum: float = 4.5) -> QColor:
+    """Adjust a foreground only as far as needed for contrast on its surface."""
+    backdrop = _luminance(background) + 0.05
+
+    def contrast(foreground: QColor) -> float:
+        light = _luminance(foreground) + 0.05
+        return max(light, backdrop) / min(light, backdrop)
+
+    if contrast(color) >= minimum:
+        return color
+    ink = contrast_ink(background)
+    lo, hi = 0.0, 1.0
+    result = ink
+    for _ in range(8):
+        mix = (lo + hi) / 2
+        candidate = QColor.fromRgbF(
+            color.redF() + (ink.redF() - color.redF()) * mix,
+            color.greenF() + (ink.greenF() - color.greenF()) * mix,
+            color.blueF() + (ink.blueF() - color.blueF()) * mix,
+        )
+        if contrast(candidate) >= minimum:
+            hi = mix
+            result = candidate
+        else:
+            lo = mix
+    return result
+
+
 def accent_color(color: str) -> str:
     """Resolve an existing accent for a custom-painted widget."""
     if _interface_color is None:

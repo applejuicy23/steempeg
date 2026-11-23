@@ -1,17 +1,13 @@
-"""Steempeg PRO brand chip — rounded rect, bold PRO.
-
-Draft seed for v50: title bar + splash only. Not a second app logo.
-"""
+"""Steempeg PRO brand chip for the title bar, splash and dialogs."""
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, QSize
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-# Warm red chip — sibling to free violet, not the whole UI theme yet.
-PRO_RED = QColor("#d64545")
-PRO_RED_SOFT = QColor("#e85a5a")
-PRO_TEXT = QColor("#ffffff")
+from steempeg.ui.pro_appearance import contrast_ink, pro_brand_color, visible_accent
+
+_DARK_CHROME = QColor("#222222")
 
 
 class ProBadge(QWidget):
@@ -67,7 +63,12 @@ class ProBadge(QWidget):
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         path = QPainterPath()
         path.addRoundedRect(r, self._radius, self._radius)
-        p.fillPath(path, PRO_RED)
-        p.setPen(PRO_TEXT)
+        fill = pro_brand_color()
+        p.fillPath(path, fill)
+        edge = visible_accent(fill, _DARK_CHROME, minimum=3)
+        if edge != fill:
+            p.setPen(QPen(edge, 1))
+            p.drawPath(path)
+        p.setPen(contrast_ink(fill))
         p.setFont(self._font)
         p.drawText(self.rect(), int(Qt.AlignmentFlag.AlignCenter), "PRO")
