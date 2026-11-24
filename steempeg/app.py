@@ -1709,7 +1709,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 "QPushButton:hover {{ background-color: #404040; border: 2px solid #6b5a8e; }}"
                 "QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #b29ae7; }}"
                 "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
-                "QPushButton::menu-indicator {{ image: none; }}"
+                "QPushButton::menu-indicator {{ image: none; width: 0px; height: 0px; }}"
             )
             self._dash_btn_style_start = (
                 "QPushButton {{ font-family: <<FONT>>; "

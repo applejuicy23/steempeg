@@ -811,7 +811,7 @@ def dash_secondary_button_stylesheet(
             color: #555555;
             border: 2px solid {p.button_disabled_border};
         }}
-        QPushButton::menu-indicator {{ image: none; }}
+        QPushButton::menu-indicator {{ image: none; width: 0px; height: 0px; }}
     """
 
 
