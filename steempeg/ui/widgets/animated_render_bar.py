@@ -1,7 +1,7 @@
 """Animated render progress bar for the export dashboard.
 
-Replaces the flat QProgressBar strip with smooth value easing, a purple
-gradient fill, and a moving shimmer while FFmpeg is working.
+Replaces the flat QProgressBar strip with smooth value easing,
+state-specific colors, and a moving shimmer while FFmpeg is working.
 """
 import math
 
@@ -204,7 +204,7 @@ class AnimatedRenderBar(QWidget):
         painter.end()
 
     def _gradient_colors(self) -> tuple[QColor, QColor]:
-        if self._state == "preparing" or (self._render_dashboard and self._state == "busy"):
+        if self._state == "preparing":
             return _GRADIENT_START, _GRADIENT_END
         if self._state == "rendering" and self._render_dashboard:
             color = render_bar_accent()
@@ -222,7 +222,7 @@ class AnimatedRenderBar(QWidget):
         return grad
 
     def _paint_bounce(self, painter, track, radius):
-        """Purple segment ping-pongs inside the track (library search)."""
+        """The busy segment ping-pongs inside the track."""
         w = track.width()
         h = track.height()
         seg = max(28.0, w * 0.22)
