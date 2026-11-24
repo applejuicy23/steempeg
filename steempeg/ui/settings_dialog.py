@@ -2247,6 +2247,8 @@ class SettingsDialog(SteempegDialog):
         btn_get.clicked.connect(self._on_get_steempeg_pro)
         btn_off = QPushButton("Turn off PRO")
         btn_off.setObjectName("ProPromoOffBtn")
+        btn_off.setIcon(load_icon("exit.png", 16))
+        btn_off.setIconSize(QSize(16, 16))
         btn_off.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_off.setStyleSheet(_pro_action_button_stylesheet())
         btn_off.setToolTip("Turn off Steempeg PRO and its appearance options.")
