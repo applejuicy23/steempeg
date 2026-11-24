@@ -7181,12 +7181,14 @@ def main():
             startup_trace("main_window_shown")
             window._startup_measurement.window_shown()
 
-            def _prepare_settings_when_idle():
+            def _prepare_dialogs_when_idle():
+                from steempeg.ui.kofi_dialog import schedule_kofi_warmup
                 from steempeg.ui.settings_dialog import schedule_settings_warmup
 
                 schedule_settings_warmup(window)
+                schedule_kofi_warmup(window)
 
-            QTimer.singleShot(1000, _prepare_settings_when_idle)
+            QTimer.singleShot(1000, _prepare_dialogs_when_idle)
             if not load_hide_kofi(settings):
                 try:
                     from steempeg.services.kofi_remote import refresh_kofi_url_async

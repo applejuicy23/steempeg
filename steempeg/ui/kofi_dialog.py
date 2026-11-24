@@ -7,9 +7,10 @@ import sys
 import webbrowser
 from functools import lru_cache
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QIcon, QPainterPath, QPalette, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -57,14 +58,17 @@ class KofiLinkRow(QWidget):
         self.copy_button.setIcon(load_icon("copyfile.png", 14))
         self.copy_button.setIconSize(QSize(14, 14))
         self.copy_button.setFixedSize(22, 22)
+        self.copy_button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.copy_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.copy_button.setToolTip("Copy Ko-fi link")
         self.copy_button.setAccessibleName("Copy Ko-fi link")
         self.copy_button.setStyleSheet(
             "QPushButton#KofiCopyLink { background: transparent; border: 1px solid transparent;"
             " border-radius: 5px; padding: 0; }"
-            "QPushButton#KofiCopyLink:hover, QPushButton#KofiCopyLink:focus {"
+            "QPushButton#KofiCopyLink:focus { border-color: rgba(255, 255, 255, 90); }"
+            "QPushButton#KofiCopyLink:hover {"
             " background: rgba(255, 255, 255, 18); border-color: rgba(255, 255, 255, 54); }"
+            "QPushButton#KofiCopyLink:pressed { background: rgba(255, 255, 255, 36); }"
         )
         self.copy_button.clicked.connect(self._copy_link)
         layout.addWidget(self.copy_button)
@@ -313,16 +317,58 @@ def _cozy_stylesheet(*, support_font: str) -> str:
 """
 
 
-def show_kofi_dialog(parent=None) -> None:
-    """Frameless cozy Donate Me card — cream plate, cup mark, soft Support CTA."""
+def schedule_kofi_warmup(app) -> None:
+    """Prepare the hidden card on the Qt thread once startup has settled."""
+    from steempeg.ui.settings_prefs import load_hide_kofi
+    from steempeg.ui.startup_metrics import _BUSY
+
+    def prepare():
+        if not app.ui.isVisible() or load_hide_kofi(app.load_user_settings()):
+            return
+        startup = getattr(app, "_startup_measurement", None)
+        settings_timer = getattr(getattr(app, "_settings_warmup", None), "timer", None)
+        if (
+            (startup is not None and startup.result is None)
+            or (settings_timer is not None and settings_timer.isActive())
+            or any(getattr(app, key, False) for key in _BUSY)
+            or QApplication.activeModalWidget() is not None
+            or QApplication.mouseButtons() != Qt.MouseButton.NoButton
+            or getattr(app, "_is_switching", False)
+        ):
+            QTimer.singleShot(250, app.ui, prepare)
+            return
+        try:
+            prepare_kofi_dialog(app.ui)
+        except Exception:
+            logging.exception("Ko-fi warmup failed; normal opening remains available")
+
+    QTimer.singleShot(500, app.ui, prepare)
+
+
+def prepare_kofi_dialog(parent=None) -> QDialog:
+    """Cache a polished, unmapped Donate Me card for this parent and size."""
+    from steempeg.ui.ui_density import scaled_dialog_size
+
+    size = scaled_dialog_size(420, 430, parent=parent)
+    if parent is None:
+        return _build_kofi_dialog(parent, size)
+    dialog = parent.findChild(
+        QDialog, "SteempegKofiDialog", Qt.FindChildOption.FindDirectChildrenOnly
+    )
+    if dialog is not None:
+        if dialog.isVisible() or dialog._kofi_design_size == size:
+            return dialog
+        dialog.setObjectName("")
+        dialog.deleteLater()
+    dialog = _build_kofi_dialog(parent, size)
+    dialog._kofi_design_size = size
+    return dialog
+
+
+def _build_kofi_dialog(parent, size: tuple[int, int]) -> QDialog:
     from steempeg.services.kofi_remote import display_kofi_host, resolve_kofi_url
     from steempeg.ui.icon_assets import load_pixmap
     from steempeg.ui.icon_utils import apply_square_icon
-    from steempeg.ui.ui_density import scaled_dialog_size
-
-    # Prefer live Pages meta so a renamed Ko-fi slug updates without a release.
-    kofi_url = resolve_kofi_url(refresh=True, timeout=2.5)
-    kofi_host = display_kofi_host(kofi_url)
 
     fredoka = register_bundled_fredoka()
 
@@ -335,7 +381,7 @@ def show_kofi_dialog(parent=None) -> None:
     # Linux font metrics are taller than this card. A fixed 430px box was
     # crushing the 128px cup below its minimum, so "Donate Me!" sat on the disc.
     # Height is applied after the layout exists. Windows already fits.
-    kofi_w, kofi_h = scaled_dialog_size(420, 430, parent=parent)
+    kofi_w, kofi_h = size
     linux = sys.platform != "win32"
     if linux:
         dialog.setFixedWidth(kofi_w)
@@ -413,7 +459,7 @@ def show_kofi_dialog(parent=None) -> None:
     pitch.setFont(pitch_font)
     content.addWidget(pitch)
 
-    dim = QLabel(kofi_host)
+    dim = QLabel(display_kofi_host(resolve_kofi_url()))
     dim.setObjectName("KofiDim")
     dim.setAlignment(Qt.AlignmentFlag.AlignHCenter)
     content.addWidget(dim)
@@ -438,7 +484,12 @@ def show_kofi_dialog(parent=None) -> None:
     if not cup.isNull():
         btn_open.setIcon(QIcon(cup))
         btn_open.setIconSize(cup.size())
-    btn_open.clicked.connect(lambda: webbrowser.open(kofi_url))
+    def open_link() -> None:
+        url = resolve_kofi_url()
+        dim.setText(display_kofi_host(url))
+        webbrowser.open(url)
+
+    btn_open.clicked.connect(open_link)
     support_row = QHBoxLayout()
     support_row.addStretch(1)
     support_row.addWidget(btn_open)
@@ -457,10 +508,20 @@ def show_kofi_dialog(parent=None) -> None:
     close_row.addWidget(btn_close, 0, Qt.AlignmentFlag.AlignRight)
     plate_lay.addLayout(close_row)
 
+    dialog.ensurePolished()
+    shell.activate()
     if linux:
-        dialog.ensurePolished()
-        shell.activate()
         hint = dialog.sizeHint()
         dialog.setFixedSize(dialog.width(), hint.height())
+    return dialog
 
+
+def show_kofi_dialog(parent=None) -> None:
+    from steempeg.services.kofi_remote import display_kofi_host, refresh_kofi_url_async, resolve_kofi_url
+
+    dialog = prepare_kofi_dialog(parent)
+    if dialog.isVisible():
+        return
+    dialog.findChild(QLabel, "KofiDim").setText(display_kofi_host(resolve_kofi_url()))
+    QTimer.singleShot(0, dialog, refresh_kofi_url_async)
     dialog.exec()
