@@ -2105,7 +2105,8 @@ class RenderMixin:
         else:
             theme = ut.chrome_colors_for_active()
         dlg = RenderQueueHistoryDialog(
-            batches, parent=self.ui, bar_color=theme["title_bar"], bg_color=theme["app_bg"]
+            batches, parent=self.ui, cache_dir=self.cache_dir,
+            bar_color=theme["title_bar"], bg_color=theme["app_bg"],
         )
         dlg.open_output_requested.connect(self.open_rendered_file)
         dlg.open_in_rendered_requested.connect(self.open_in_rendered_videos)

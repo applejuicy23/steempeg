@@ -1,4 +1,4 @@
-"""Shared header and library-style export cards for render completion windows."""
+"""Shared header and export cards for render completion and history."""
 from __future__ import annotations
 
 import os
@@ -117,7 +117,7 @@ class _ExportPreview(QWidget):
 
 
 class ExportResultCard(QFrame):
-    def __init__(self, job, *, output_file=None, cache_dir=None, status=None):
+    def __init__(self, job, *, output_file=None, cache_dir=None, status=None, status_text=None):
         super().__init__()
         self.setObjectName("exportResultCard")
         self.status = status or job.status
@@ -151,12 +151,12 @@ class ExportResultCard(QFrame):
         mark.setFixedSize(12, 12)
         mark.setPixmap(tinted_pixmap("success.png" if self.success else "cancel.png" if self.failed else "info.png",
                                      self._status_color, 12))
-        self.status_label = _label(self.status.value.capitalize(), 11, bold=True)
+        self.status_label = _label(status_text or self.status.value.capitalize(), 11, bold=True)
         badge_row.addWidget(mark)
         badge_row.addWidget(self.status_label)
         title_row.addWidget(self.badge)
         text.addLayout(title_row)
-        self.preset = _label(format_job_preset(job.settings).replace(" · ", " | "), 12, elided=True)
+        self.preset = _label(format_job_preset(job.settings).replace(" · ", " | "), 13, elided=True)
         text.addWidget(self.preset)
         trim = format_job_trim(job.settings)
         self.range = _label(trim.removeprefix("✂️ "), 12, elided=True)
@@ -164,8 +164,7 @@ class ExportResultCard(QFrame):
         range_row.setSpacing(5)
         self.range_icon = QLabel()
         self.range_icon.setFixedSize(14, 14)
-        self.range_icon.setPixmap(QPixmap(get_resource_path("trim_icon.png")).scaled(
-            14, 14, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        self.range_icon.setPixmap(tinted_pixmap("trim_icon.png", "#bda4f0", 14))
         self.range_icon.setStyleSheet("background: transparent; border: none;")
         self.range_icon.setVisible(trim != "Full clip")
         range_row.addWidget(self.range_icon)
@@ -194,7 +193,11 @@ class ExportResultCard(QFrame):
                           f"border: 1px solid {palette.border_card}; border-radius: 12px;}}")
         for label in (self.name,):
             label.setStyleSheet(f"background: transparent; border: none; color: {tok.TEXT_TITLE};")
-        for label in (self.preset, self.date, self.path):
+        self.preset.setStyleSheet(
+            f"background: transparent; border: none; color: {tok.TEXT_TITLE}; "
+            f"font-family: {tok.FONT_APP}; font-size: 13px; font-weight: bold;"
+        )
+        for label in (self.date, self.path):
             label.setStyleSheet(f"background: transparent; border: none; color: {tok.TEXT_MUTED};")
         self.range.setStyleSheet("background: transparent; border: none; color: #bda4f0;")
         color = self._status_color

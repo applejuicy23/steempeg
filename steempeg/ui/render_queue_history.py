@@ -17,14 +17,15 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import reveal_in_file_manager
-from steempeg.render.queue import JobStatus, STATUS_COLORS
-from steempeg.render.queue_display import format_job_output, format_job_preset, format_job_trim
+from steempeg.render.queue import JobStatus
 from steempeg.render.queue_history import RenderBatchRecord, parse_history_job
-from steempeg.ui.icon_assets import close_clip_icon, load_icon
+from steempeg.ui.icon_assets import load_icon
 from steempeg.ui import design_tokens as tok
-from steempeg.ui.queue_card_shared import _FONT, set_game_icon_label
+from steempeg.ui.queue_card_shared import _FONT
+from steempeg.ui.render_result_widgets import ExportResultCard
 from steempeg.ui.widgets import ElidedLabel
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
+from steempeg.ui.widgets.flow_layout import FlowLayout
 from steempeg.ui.message_dialog import steempeg_question
 
 _DIALOG_STYLE = """
@@ -47,10 +48,7 @@ def _pill_btn_style() -> str:
 def _action_btn_style() -> str:
     from steempeg.ui import ui_theme as ut
 
-    # Keep history button geometry; match the Settings Browse / Reset type.
-    return ut.render_history_pill_button_stylesheet(bold=True).replace(
-        "font-size: 13px;", "font-size: 12px;"
-    )
+    return ut.settings_dialog_secondary_button_stylesheet()
 
 
 def _close_btn_style() -> str:
@@ -84,17 +82,6 @@ def _batch_summary(batch: RenderBatchRecord) -> str:
     return ", ".join(parts) if parts else "No renders"
 
 
-_JOB_TITLE_ICON = 22
-_STATUS_ICON = 14
-
-
-_FONT_SEMIBOLD = f"font-family: {tok.FONT_APP}; font-weight: 600;"
-
-# Match Render Queue Clear / Refresh: Segoe UI bold 13px.
-_PILL_BTN_STYLE = _pill_btn_style()
-_ACTION_BTN_STYLE = _action_btn_style()
-
-
 class RenderQueueHistoryDialog(SteempegDialog):
     open_output_requested = Signal(str)
     open_in_rendered_requested = Signal(str)
@@ -105,6 +92,7 @@ class RenderQueueHistoryDialog(SteempegDialog):
         batches: list[RenderBatchRecord],
         parent=None,
         *,
+        cache_dir: str | None = None,
         bar_color: str | None = None,
         bg_color: str | None = None,
     ):
@@ -116,6 +104,7 @@ class RenderQueueHistoryDialog(SteempegDialog):
         self.setMinimumSize(mw, mh)
         self.resize(rw, rh)
         self._batches = batches
+        self._cache_dir = cache_dir
         self._apply_history_styles()
 
         root = self.content_layout
@@ -137,7 +126,7 @@ class RenderQueueHistoryDialog(SteempegDialog):
         btn_clear.setCursor(Qt.PointingHandCursor)
         btn_clear.setIcon(load_icon("clear.png", 16))
         btn_clear.setIconSize(QSize(16, 16))
-        btn_clear.setStyleSheet(_PILL_BTN_STYLE)
+        btn_clear.setStyleSheet(_pill_btn_style())
         from PySide6.QtGui import QFont as _QF
         clear_font = tok.ui_qfont(pixel_size=13, weight=_QF.Weight.Bold)
         btn_clear.setFont(clear_font)
@@ -212,16 +201,10 @@ class RenderQueueHistoryDialog(SteempegDialog):
 
     def _apply_history_styles(self) -> None:
         """Layer card faces + label rules on SteempegDialog chrome."""
-        global _PILL_BTN_STYLE, _ACTION_BTN_STYLE
-        _PILL_BTN_STYLE = _pill_btn_style()
-        _ACTION_BTN_STYLE = _action_btn_style()
         self.setStyleSheet(self.styleSheet() + _DIALOG_STYLE + _surface_styles())
 
     def _refresh_theme_surfaces(self) -> None:
         """Re-tint cards and action buttons from active tokens."""
-        global _PILL_BTN_STYLE, _ACTION_BTN_STYLE
-        _PILL_BTN_STYLE = _pill_btn_style()
-        _ACTION_BTN_STYLE = _action_btn_style()
         self._apply_history_styles()
         host = getattr(self, "_history_scroll_host", None)
         if host is not None:
@@ -235,18 +218,15 @@ class RenderQueueHistoryDialog(SteempegDialog):
             )
         btn_clear = getattr(self, "_btn_clear", None)
         if btn_clear is not None:
-            btn_clear.setStyleSheet(_PILL_BTN_STYLE)
+            btn_clear.setStyleSheet(_pill_btn_style())
         btn_close = getattr(self, "_btn_close", None)
         if btn_close is not None:
             btn_close.setStyleSheet(_close_btn_style())
-        for btn in self.findChildren(QPushButton):
-            if btn in (btn_clear, btn_close):
-                continue
-            text = (btn.text() or "").strip()
-            if text in ("Open folder", "Open file", "Rendered videos"):
-                btn.setStyleSheet(_ACTION_BTN_STYLE)
-            else:
-                btn.setStyleSheet(_PILL_BTN_STYLE)
+        action_style = _action_btn_style()
+        for card in self.findChildren(ExportResultCard):
+            card.apply_theme()
+            for btn in card.findChildren(QPushButton):
+                btn.setStyleSheet(action_style)
 
     def apply_ui_theme_chrome(self) -> None:
         """Live-retint when Settings switches UI theme while Render History is open."""
@@ -291,31 +271,6 @@ class RenderQueueHistoryDialog(SteempegDialog):
         self._batches.clear()
         self.done(2)
 
-    @staticmethod
-    def _status_badge(status_key: str, status_lbl: str, color: str) -> QWidget:
-        host = QWidget()
-        host.setStyleSheet("background: transparent; border: none;")
-        row = QHBoxLayout(host)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(4)
-        icon = QLabel()
-        icon.setFixedSize(_STATUS_ICON, _STATUS_ICON)
-        icon.setStyleSheet("background: transparent; border: none;")
-        if status_key == JobStatus.COMPLETED.value:
-            icon.setPixmap(load_icon("success.png", _STATUS_ICON).pixmap(_STATUS_ICON, _STATUS_ICON))
-        elif status_key == JobStatus.ERROR.value:
-            icon.setPixmap(close_clip_icon(_STATUS_ICON).pixmap(_STATUS_ICON, _STATUS_ICON))
-        else:
-            icon.hide()
-        text = QLabel(status_lbl)
-        text.setStyleSheet(
-            f"color: {color}; font-size: 10px; font-weight: 600; "
-            f"font-family: {tok.FONT_APP}; background: transparent;"
-        )
-        row.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
-        row.addWidget(text, 0, Qt.AlignmentFlag.AlignVCenter)
-        return host
-
     def _build_batch_card(self, batch: RenderBatchRecord) -> QFrame:
         frame = QFrame()
         frame.setObjectName("batchFrame")
@@ -330,7 +285,7 @@ class RenderQueueHistoryDialog(SteempegDialog):
         head_row.setSpacing(6)
         cal = QLabel("📅")
         cal.setStyleSheet(f"font-size: 12px; background: transparent; border: none; {_FONT}")
-        head = QLabel(f"{when}  •  {summary}")
+        head = ElidedLabel(f"{when}  •  {summary}")
         head.setStyleSheet(
             f"color: #c4b5e8; font-size: 12px; font-weight: bold; {_FONT}"
         )
@@ -345,115 +300,42 @@ class RenderQueueHistoryDialog(SteempegDialog):
 
     def _build_job_row(self, job_data: dict) -> QFrame:
         job, status_key = parse_history_job(job_data)
-        frame = QFrame()
-        frame.setObjectName("jobFrame")
-        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        frame.setMinimumHeight(56)
-        row = QVBoxLayout(frame)
-        row.setContentsMargins(10, 8, 10, 8)
-        row.setSpacing(3)
-
         if job is None:
-            row.addWidget(QLabel("Unknown job"))
+            frame = QFrame()
+            frame.setObjectName("jobFrame")
+            layout = QVBoxLayout(frame)
+            layout.setContentsMargins(12, 12, 12, 12)
+            layout.addWidget(QLabel("Unknown job"))
             return frame
 
-        if status_key == "cancelled":
-            color = "#888888"
-            status_lbl = "Skipped"
-        else:
-            try:
-                st = JobStatus(status_key)
-            except ValueError:
-                st = JobStatus.QUEUED
-            color = STATUS_COLORS.get(st, "#888888")
-            status_lbl = st.value.capitalize()
-
-        title_line = QHBoxLayout()
-        title_line.setSpacing(8)
-        game_icon = QLabel()
-        set_game_icon_label(game_icon, job, size=_JOB_TITLE_ICON)
-        name = QLabel(job.game_name.strip() or os.path.basename(job.clip_path))
-        name.setStyleSheet(
-            f"color: #f0f0f0; font-size: 13px; {_FONT_SEMIBOLD} background: transparent;"
+        frame = ExportResultCard(
+            job, cache_dir=self._cache_dir,
+            status_text="Skipped" if status_key == "cancelled" else None,
         )
-        badge = self._status_badge(status_key, status_lbl, color)
-        title_line.addWidget(game_icon, 0, Qt.AlignmentFlag.AlignVCenter)
-        title_line.addWidget(name, 1, Qt.AlignmentFlag.AlignVCenter)
-        title_line.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
-        row.addLayout(title_line)
-
-        meta = QLabel(
-            f"{job.clip_date} {job.clip_time}  •  {format_job_preset(job.settings)}"
-        )
-        meta.setStyleSheet(f"color: #888888; font-size: 11px; {_FONT}")
-        row.addWidget(meta)
-
-        trim = format_job_trim(job.settings)
-        if trim != "Full clip":
-            trim_lbl = QLabel(trim)
-            trim_lbl.setStyleSheet(f"color: #b29ae7; font-size: 11px; {_FONT}")
-            row.addWidget(trim_lbl)
-
-        out_path = job.output_file or format_job_output(job)
-        file_exists = bool(out_path and os.path.isfile(out_path))
-        path_color = "#999999" if file_exists else "#666666"
-        path_suffix = "" if file_exists or not out_path else "  (file deleted)"
-        out_lbl = ElidedLabel(f"📁 {out_path}{path_suffix}")
-        out_lbl.setStyleSheet(f"color: {path_color}; font-size: 11px; {_FONT}")
-        row.addWidget(out_lbl)
-
-        if job.error_message and status_key == JobStatus.ERROR.value:
-            err = ElidedLabel(job.error_message[:120])
-            err.setStyleSheet(f"color: #ff8888; font-size: 10px; {_FONT}")
-            row.addWidget(err)
-
-        if file_exists and status_key == JobStatus.COMPLETED.value:
-            btn_row = QHBoxLayout()
-            btn_row.setContentsMargins(0, 8, 0, 0)
-            btn_row.setSpacing(8)
-            btn_row.addStretch()
-            btn_folder = QPushButton("Open folder")
-            btn_folder.setCursor(Qt.PointingHandCursor)
-            btn_folder.setStyleSheet(_ACTION_BTN_STYLE)
-            btn_folder.clicked.connect(
-                lambda _=False, p=out_path: reveal_in_file_manager(p)
-            )
-            btn_open = QPushButton("Open file")
-            btn_open.setCursor(Qt.PointingHandCursor)
-            btn_open.setStyleSheet(_ACTION_BTN_STYLE)
-            btn_open.clicked.connect(lambda _=False, p=out_path: self.open_output_requested.emit(p))
-            btn_library = QPushButton("Rendered videos")
-            btn_library.setCursor(Qt.PointingHandCursor)
-            btn_library.setStyleSheet(_ACTION_BTN_STYLE)
-            btn_library.clicked.connect(
-                lambda _=False, p=out_path: self._request_open_in_rendered(p)
-            )
-            btn_row.addWidget(btn_folder)
-            btn_row.addWidget(btn_open)
-            btn_row.addWidget(btn_library)
-            row.addLayout(btn_row)
-        elif status_key in (JobStatus.COMPLETED.value, JobStatus.ERROR.value):
-            btn_row = QHBoxLayout()
-            btn_row.setContentsMargins(0, 8, 0, 0)
-            btn_row.setSpacing(8)
-            btn_row.addStretch()
-            btn_details = QPushButton("Details")
-            btn_details.setCursor(Qt.PointingHandCursor)
-            btn_details.setStyleSheet(_PILL_BTN_STYLE)
-            btn_details.clicked.connect(
-                lambda _=False, data=job_data: self._show_job_details(data)
-            )
-            btn_row.addWidget(btn_details)
+        out_path = frame.output_path
+        actions = []
+        if frame.file_exists and job.status == JobStatus.COMPLETED:
+            actions = [
+                ("📂  Open folder", lambda: reveal_in_file_manager(out_path)),
+                ("▶️  Open file", lambda: self.open_output_requested.emit(out_path)),
+                ("🎬  Rendered videos", lambda: self._request_open_in_rendered(out_path)),
+            ]
+        elif job.status in (JobStatus.COMPLETED, JobStatus.ERROR):
+            actions.append(("Details", lambda: self._show_job_details(job_data)))
             clip_path = (job.clip_path or "").strip()
             if clip_path and os.path.isdir(clip_path):
-                btn_source = QPushButton("Source clip")
-                btn_source.setCursor(Qt.PointingHandCursor)
-                btn_source.setStyleSheet(_PILL_BTN_STYLE)
-                btn_source.clicked.connect(
-                    lambda _=False, p=clip_path: self._request_open_source_clip(p)
-                )
-                btn_row.addWidget(btn_source)
-            row.addLayout(btn_row)
+                actions.append(("Source clip", lambda: self._request_open_source_clip(clip_path)))
+
+        if actions:
+            buttons = FlowLayout()
+            style = _action_btn_style()
+            for text, action in actions:
+                button = QPushButton(text)
+                button.setCursor(Qt.CursorShape.PointingHandCursor)
+                button.setStyleSheet(style)
+                button.clicked.connect(action)
+                buttons.addWidget(button)
+            frame.body.addLayout(buttons)
 
         return frame
 
