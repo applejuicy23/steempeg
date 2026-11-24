@@ -131,11 +131,9 @@ def _apply_trim_tools_visibility(app, tools: QWidget, trim: QWidget, active: boo
     if active:
         # Layout first so geometry/sizeHint are correct, then fade in.
         tools.setVisible(True)
-        final = None
         if getattr(app, "_trim_tools_placement", None) == "below":
             _reposition_tools_below(app, trim, tools)
-            final = tools.geometry()
-        animate_footer_overlay_widget(tools, show=True, final_geom=final)
+        animate_footer_overlay_widget(tools, show=True)
     else:
         animate_footer_overlay_widget(tools, show=False)
 

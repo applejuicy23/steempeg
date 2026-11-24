@@ -171,9 +171,8 @@ def animate_footer_overlay_widget(
     widget: QWidget,
     *,
     show: bool,
-    final_geom: QRect | None = None,
 ) -> None:
-    """Fade (and optional slide) for trim tools / overlay-placed pills."""
+    """Fade the trim tools while adaptive placement owns their geometry."""
     if widget is None:
         return
     _stop_group(widget, "_footer_overlay_anim")
@@ -181,11 +180,6 @@ def animate_footer_overlay_widget(
     if show:
         widget.show()
         widget.raise_()
-        if final_geom is not None and final_geom.isValid():
-            # Start slightly tucked toward the parent (under Cancel / theater).
-            start = QRect(final_geom)
-            start.moveTop(max(0, final_geom.top() - 8))
-            widget.setGeometry(start)
         fx = _opacity_effect(widget)
         fx.setOpacity(0.0)
         start_o, end_o = 0.0, 1.0
@@ -195,7 +189,6 @@ def animate_footer_overlay_widget(
         fx = _opacity_effect(widget)
         fx.setOpacity(float(fx.opacity()) if fx.opacity() > 0 else 1.0)
         start_o, end_o = float(fx.opacity()), 0.0
-        final_geom = widget.geometry()
 
     group = QParallelAnimationGroup(widget)
     o_anim = QPropertyAnimation(fx, b"opacity", widget)
@@ -205,19 +198,9 @@ def animate_footer_overlay_widget(
     o_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
     group.addAnimation(o_anim)
 
-    if show and final_geom is not None and final_geom.isValid():
-        g_anim = QPropertyAnimation(widget, b"geometry", widget)
-        g_anim.setDuration(_DUR_MS)
-        g_anim.setStartValue(widget.geometry())
-        g_anim.setEndValue(final_geom)
-        g_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        group.addAnimation(g_anim)
-
     def _finish() -> None:
         widget._footer_overlay_anim = None  # type: ignore[attr-defined]
         if show:
-            if final_geom is not None and final_geom.isValid():
-                widget.setGeometry(final_geom)
             _clear_opacity_effect(widget)
             widget.raise_()
         else:
