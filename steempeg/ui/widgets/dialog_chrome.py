@@ -31,7 +31,6 @@ from steempeg.ui.icon_utils import (
 from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES, apply_dark_combo_popup
 from steempeg.ui.window_chrome import _TrafficLight
 
-_SIDE_RAIL_PX = 2
 _CARD_RADIUS_PX = 10
 
 
@@ -45,7 +44,6 @@ class _DialogTitleBar(QWidget):
         dialog: QDialog,
         *,
         title: str,
-        bar_color: str,
         show_minimize: bool = False,
         show_maximize: bool = False,
         bar_icon: str | None = None,
@@ -123,27 +121,8 @@ class _DialogTitleBar(QWidget):
         self.setStyleSheet(
             f"""
             QWidget#SteempegDialogBar {{
-                background-color: {bar_color};
-                border-top-left-radius: {_CARD_RADIUS_PX}px;
-                border-top-right-radius: {_CARD_RADIUS_PX}px;
-                border-bottom: 1px solid {tok.BORDER_SUBTLE};
-            }}
-            QLabel#SteempegDialogTitle {{
-                color: {tok.TEXT_TITLE};
-                font-family: {tok.FONT_UI};
-                background: transparent;
-            }}
-            """
-        )
-
-    def set_bar_color(self, bar_color: str) -> None:
-        self.setStyleSheet(
-            f"""
-            QWidget#SteempegDialogBar {{
-                background-color: {bar_color};
-                border-top-left-radius: {_CARD_RADIUS_PX}px;
-                border-top-right-radius: {_CARD_RADIUS_PX}px;
-                border-bottom: 1px solid {tok.BORDER_SUBTLE};
+                background-color: transparent;
+                border: none;
             }}
             QLabel#SteempegDialogTitle {{
                 color: {tok.TEXT_TITLE};
@@ -246,15 +225,16 @@ class _DialogTitleBar(QWidget):
 class _DialogCard(QWidget):
     """Rounded shell painted with antialiasing — avoids jagged QRegion masks."""
 
-    def __init__(self, parent=None, *, radius: int = _CARD_RADIUS_PX, fill: str = "#1a1a1a"):
+    def __init__(self, parent, *, bar_color: str, bg_color: str):
         super().__init__(parent)
-        self._radius = float(radius)
-        self._fill = QColor(fill)
+        self._bar_fill = QColor(bar_color)
+        self._body_fill = QColor(bg_color)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
-    def set_fill(self, color: str) -> None:
-        self._fill = QColor(color)
+    def set_colors(self, bar_color: str, bg_color: str) -> None:
+        self._bar_fill = QColor(bar_color)
+        self._body_fill = QColor(bg_color)
         self.update()
 
     def paintEvent(self, event):
@@ -264,9 +244,12 @@ class _DialogCard(QWidget):
         # Inset by 0.5px so the AA edge sits on pixel centers (less staircasing).
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         path = QPainterPath()
-        path.addRoundedRect(rect, self._radius, self._radius)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.fillPath(path, self._fill)
+        path.addRoundedRect(rect, _CARD_RADIUS_PX, _CARD_RADIUS_PX)
+        title_height = tok.TITLE_BAR_HEIGHT
+        painter.setClipRect(0, 0, self.width(), title_height)
+        painter.fillPath(path, self._bar_fill)
+        painter.setClipRect(0, title_height, self.width(), max(0, self.height() - title_height))
+        painter.fillPath(path, self._body_fill)
 
 
 class SteempegDialog(QDialog):
@@ -327,7 +310,7 @@ class SteempegDialog(QDialog):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        self._card = _DialogCard(self, radius=_CARD_RADIUS_PX, fill=bar_color)
+        self._card = _DialogCard(self, bar_color=bar_color, bg_color=bg_color)
         self._card.setObjectName("SteempegDialogCard")
         outer.addWidget(self._card)
 
@@ -338,7 +321,6 @@ class SteempegDialog(QDialog):
         self._title_bar = _DialogTitleBar(
             self,
             title=title,
-            bar_color=bar_color,
             show_minimize=show_minimize,
             show_maximize=show_maximize,
             bar_icon=bar_icon,
@@ -346,21 +328,13 @@ class SteempegDialog(QDialog):
         self._title_bar.close_requested.connect(self.reject)
         card_layout.addWidget(self._title_bar)
 
-        body_host = QWidget(self._card)
-        body_host.setObjectName("SteempegDialogBodyHost")
-        body_host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        body_layout = QVBoxLayout(body_host)
-        body_layout.setContentsMargins(_SIDE_RAIL_PX, 0, _SIDE_RAIL_PX, _SIDE_RAIL_PX)
-        body_layout.setSpacing(0)
-
-        content = QWidget(body_host)
+        content = QWidget(self._card)
         content.setObjectName("SteempegDialogContent")
         content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.content_layout = QVBoxLayout(content)
         self.content_layout.setContentsMargins(*content_margins)
         self.content_layout.setSpacing(12)
-        body_layout.addWidget(content, 1)
-        card_layout.addWidget(body_host, 1)
+        card_layout.addWidget(content, 1)
 
         self._apply_card_chrome(bar_color, bg_color)
         self._comfort_size: tuple[int, int] | None = None
@@ -630,12 +604,8 @@ class SteempegDialog(QDialog):
         self.clearMask()
 
     def _apply_card_chrome(self, bar_color: str, bg_color: str) -> None:
-        """Title-bar-colored side rails so the shell does not melt into the desktop."""
-        if hasattr(self._card, "set_fill"):
-            self._card.set_fill(bar_color)
-        inner_radius = max(_CARD_RADIUS_PX - _SIDE_RAIL_PX, 0)
-        # Card fill is painted in _DialogCard.paintEvent (antialiased).
-        # Children keep stylesheet radii so their opaque rects match the shell.
+        """Paint the title and content on one continuous rounded surface."""
+        self._card.set_colors(bar_color, bg_color)
         self.setStyleSheet(
             f"""
             QDialog {{
@@ -645,13 +615,8 @@ class SteempegDialog(QDialog):
                 background-color: transparent;
                 border: none;
             }}
-            QWidget#SteempegDialogBodyHost {{
-                background-color: transparent;
-            }}
             QWidget#SteempegDialogContent {{
-                background-color: {bg_color};
-                border-bottom-left-radius: {inner_radius}px;
-                border-bottom-right-radius: {inner_radius}px;
+                background-color: transparent;
             }}
             /* Opaque scroll/stack fills — transparent + OS light palette = white panels. */
             QScrollArea {{
@@ -678,6 +643,4 @@ class SteempegDialog(QDialog):
         bg = colors["app_bg"]
         self._bar_color = bar
         self._bg_color = bg
-        if hasattr(self._title_bar, "set_bar_color"):
-            self._title_bar.set_bar_color(bar)
         self._apply_card_chrome(bar, bg)
