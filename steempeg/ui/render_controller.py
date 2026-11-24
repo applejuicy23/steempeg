@@ -2334,6 +2334,11 @@ class RenderMixin:
             return
         show = self._desktop_render_layout_is_portable_like()
         btn.setVisible(show)
+        previewing_export = (
+            hasattr(self, "_is_previewing_rendered_media")
+            and self._is_previewing_rendered_media()
+        )
+        btn.setEnabled(self._queue_is_active() or not previewing_export)
         open_dlg = getattr(self, "_desktop_render_settings_dlg", None)
         try:
             is_open = open_dlg is not None and open_dlg.isVisible() and not open_dlg.isMinimized()
@@ -3266,7 +3271,7 @@ class RenderMixin:
             if self._queue_drives_start_cta():
                 enabled = True
             elif combo_valid is not None:
-                enabled = bool(combo_valid)
+                enabled = combo_valid and not self._is_previewing_rendered_media()
             else:
                 enabled = bool(self._resolve_export_clip_path())
             self.ui.btn_start.setEnabled(enabled)
