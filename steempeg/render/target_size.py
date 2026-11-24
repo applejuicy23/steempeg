@@ -84,13 +84,11 @@ def plan_for_saved_target(
     )
 
 
-def _clip_duration_and_height(job: RenderJob) -> tuple[float, int]:
+def clip_duration_and_height(job: RenderJob) -> tuple[float, int]:
     """Seconds to encode and the tallest video height declared in the manifests."""
     settings = job.settings
-    if settings.is_trim_mode and settings.trim_end_ms > settings.trim_start_ms:
-        duration = (settings.trim_end_ms - settings.trim_start_ms) / 1000.0
-    else:
-        duration = 0.0
+    trimmed = settings.is_trim_mode and settings.trim_end_ms > settings.trim_start_ms
+    duration = (settings.trim_end_ms - settings.trim_start_ms) / 1000.0 if trimmed else 0.0
     height = 0
     salvage = [path for path in (getattr(job, "salvage_mpds", []) or []) if os.path.isfile(path)]
     manifests = salvage or discovery.find_mpd_paths(job.clip_path)
@@ -100,28 +98,29 @@ def _clip_duration_and_height(job: RenderJob) -> tuple[float, int]:
                 content = handle.read()
         except OSError:
             continue
-        if duration <= 0:
+        if not trimmed:
             seconds = discovery.parse_duration_seconds(content)
             if seconds is not None and seconds > 0:
-                duration = float(seconds)
+                duration += float(seconds)
         for match in re.finditer(r'\bheight="(\d+)"', content):
             height = max(height, int(match.group(1)))
     return duration, height
 
 
-def retarget_job_file_size(job: RenderJob) -> None:
+def retarget_job_file_size(job: RenderJob) -> BitratePlan | None:
     """Write a fresh bitrate when this job asks for a file size rather than a bitrate.
 
     Older jobs have no megabyte target. Their stored bitrate is left as-is.
     """
     settings = job.settings
     if "Target File Size" not in (settings.quality_text or ""):
-        return
+        return None
     if not settings.custom_target_lossless and int(settings.custom_target_mb or 0) <= 0:
-        return
-    duration, height = _clip_duration_and_height(job)
+        return None
+    duration, height = clip_duration_and_height(job)
     plan = plan_for_saved_target(settings, duration, height)
     if plan is None:
-        return
+        return None
     settings.custom_target_bitrate = plan.video_kbps
     settings.custom_target_height = plan.height
+    return plan

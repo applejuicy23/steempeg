@@ -52,7 +52,8 @@ def reset_source_height_cache() -> None:
 def _mpv_prop(player, name: str) -> int:
     try:
         if "/" in name:
-            val = player[name]
+            get_property = getattr(player, "_get_property", None)
+            val = get_property(name) if callable(get_property) else player[name]
         else:
             val = getattr(player, name, None)
             if val is None:
@@ -78,14 +79,14 @@ def _dict_height(params) -> int:
     return 0
 
 
-def _decoded_height(player) -> int:
+def decoded_source_height(player) -> int:
     """Height from the decoder — unaffected by vf. Prefer this always."""
     for attr in ("video-dec-params/h", "video-dec-params/dh"):
         h = _mpv_prop(player, attr)
         if h > 0:
             return h
     try:
-        h = _dict_height(player["video-dec-params"])
+        h = _dict_height(getattr(player, "video_dec_params", None))
         if h > 0:
             return h
     except Exception:
@@ -94,13 +95,13 @@ def _decoded_height(player) -> int:
 
 
 def _output_height(player) -> int:
-    """Post-vf / display height — only safe when our preview vf is absent."""
-    for attr in ("video-params/h", "dheight", "height"):
+    """Post-filter height, falling back to older mpv properties."""
+    for attr in ("video-out-params/h", "dheight", "video-params/h", "height"):
         h = _mpv_prop(player, attr)
         if h > 0:
             return h
     try:
-        h = _dict_height(player["video-params"])
+        h = _dict_height(getattr(player, "video_out_params", None))
         if h > 0:
             return h
     except Exception:
@@ -139,7 +140,7 @@ def _remember_source_h(h: int) -> int:
 
 def resolve_source_height(player) -> int:
     """Stable source height for factor math."""
-    dec = _decoded_height(player)
+    dec = decoded_source_height(player)
     if dec > 0:
         return _remember_source_h(dec)
     # Only trust output size when our downscale filter is not in the chain.
@@ -402,7 +403,7 @@ def _wait_source_height(player, *, rounds: int = 10) -> int:
     return src_h
 
 
-def apply_mpv_preview_quality(player, preset_id: str) -> bool:
+def apply_mpv_preview_quality(player, preset_id: str, *, source_height: int | None = None) -> bool:
     """Swap preview vf live — no file reload, timeline position untouched."""
     if not player:
         return True
@@ -413,7 +414,7 @@ def apply_mpv_preview_quality(player, preset_id: str) -> bool:
         logging.info("Preview quality: Source")
         return True
 
-    src_h = _wait_source_height(player)
+    src_h = _wait_source_height(player) if source_height is None else source_height
     if not src_h:
         logging.info(
             "Preview quality %s: source height unknown — defer",

@@ -14,9 +14,11 @@ import os
 import sys
 
 from PySide6.QtCore import QMimeData, QPoint, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QCursor, QGuiApplication, QIcon, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QAction, QActionGroup, QCursor, QGuiApplication, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -27,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui.player.surface_input import VideoSurfaceInput
 from steempeg.ui.pro_appearance import themed_asset_path
 from steempeg.services.new_clip_watcher import NewClipInfo
 from steempeg.ui import design_tokens as tok
@@ -268,7 +271,7 @@ class ExpressScreenshotPreview(QWidget):
         self.raise_()
 
 
-class ExpressPlayerWindow(QWidget):
+class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
     """Mini player window for one clip with Express export."""
 
     def __init__(self, app, info: NewClipInfo):
@@ -285,6 +288,8 @@ class ExpressPlayerWindow(QWidget):
         self._marks_gen = 0
         self._marks_worker = None
         self._shot_preview = None
+        self._health_report = None
+        self._preview_quality_id = "source"
         self.setObjectName("ExpressPlayer")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
@@ -309,6 +314,7 @@ class ExpressPlayerWindow(QWidget):
         body.addWidget(self._build_header())
         body.addWidget(self._build_video(), 1)
         body.addWidget(self._build_footer())
+        self.install_video_surface_click_handler()
 
         self._poll = QTimer(self)
         self._poll.setInterval(_POLL_MS)
@@ -329,6 +335,7 @@ class ExpressPlayerWindow(QWidget):
                 logging.debug("Express player: edge resize unavailable", exc_info=True)
 
         self.fit_to_screen()
+        QTimer.singleShot(0, self, self._refresh_clip_health)
 
     def fit_to_screen(self) -> None:
         """Sizes the window to a share of the screen under the cursor so 16:9 video fills it, then centres it."""
@@ -366,6 +373,11 @@ class ExpressPlayerWindow(QWidget):
     def apply_ui_theme_chrome(self) -> None:
         """Repaints the window when the user switches theme (Default / TrueDark / OLED)."""
         self.setStyleSheet(build_express_player_qss())
+        from steempeg.ui.player_zoom_chrome import sync_preview_zoom_chrome
+
+        sync_preview_zoom_chrome(self)
+        if self._health_report is not None:
+            self._paint_clip_health(self._health_report)
         if hasattr(self._timeline, "_apply_timeline_chrome_stylesheet"):
             self._timeline._apply_timeline_chrome_stylesheet()
         self._timeline.canvas.update()
@@ -379,7 +391,8 @@ class ExpressPlayerWindow(QWidget):
     # -- layout ---------------------------------------------------------------
 
     def _build_header(self) -> QFrame:
-        """Game icon + name centred, at the desktop player header's height and font."""
+        """Preview controls flank the game identity, using the desktop header metrics."""
+        from steempeg.ui.icon_assets import preview_settings_icon
         from steempeg.ui.icon_utils import apply_square_icon
         from steempeg.ui.layout_defaults import (
             PLAYER_HEADER_CANVAS_GAP,
@@ -387,6 +400,7 @@ class ExpressPlayerWindow(QWidget):
         )
         from steempeg.ui.new_clip_popup import build_game_icon_pixmap
         from steempeg.ui.player_header_layout import player_header_title_qfont
+        from steempeg.ui.player_zoom_chrome import install_player_zoom_chrome, sync_preview_zoom_chrome
         from steempeg.ui.ui_density import COMFORT
 
         header = QFrame()
@@ -400,22 +414,125 @@ class ExpressPlayerWindow(QWidget):
             + PLAYER_HEADER_CANVAS_GAP
             + int(PLAYER_HEADER_FRAME_BORDER_V)
         )
-        lay = QHBoxLayout(header)
+        lay = QGridLayout(header)
         lay.setContentsMargins(int(COMFORT.header_pad_h), 0, int(COMFORT.header_pad_h), 0)
-        lay.addStretch(1)
+        lay.setColumnStretch(0, 1)
+        lay.setColumnStretch(2, 1)
+        zoom = install_player_zoom_chrome(self)
+        sync_preview_zoom_chrome(self)
+        lay.addWidget(zoom, 0, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        identity = QWidget()
+        identity_row = QHBoxLayout(identity)
+        identity_row.setContentsMargins(0, 0, 0, 0)
+        identity_row.setSpacing(8)
         icon_px = int(COMFORT.header_icon)
         icon = QLabel()
         icon.setStyleSheet("background: transparent;")
         apply_square_icon(icon, build_game_icon_pixmap(self._info.icon_path, icon_px), icon_px)
-        lay.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
-        lay.addSpacing(8)
+        identity_row.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
         title = QLabel(self._info.game_name)
         title.setObjectName("ExpressTitle")
         title.setFont(player_header_title_qfont(int(COMFORT.header_font)))
-        lay.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
-        lay.addStretch(1)
+        title.setTextFormat(Qt.TextFormat.PlainText)
+        title.setText(title.fontMetrics().elidedText(self._info.game_name, Qt.TextElideMode.ElideRight, 300))
+        title.setToolTip(self._info.game_name)
+        identity_row.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(identity, 0, 1, Qt.AlignmentFlag.AlignCenter)
+
+        right = QWidget()
+        actions = QHBoxLayout(right)
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(8)
+        self._health_button = QPushButton("Checking…")
+        self._health_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._health_button.clicked.connect(self._show_clip_health)
+        actions.addWidget(self._health_button)
+        divider = QFrame()
+        divider.setFixedSize(1, 16)
+        divider.setStyleSheet("background: rgba(255, 255, 255, 55); border: none;")
+        actions.addWidget(divider, 0, Qt.AlignmentFlag.AlignVCenter)
+        gear = QPushButton()
+        chip = int(COMFORT.header_chip)
+        glyph = int(COMFORT.header_chip_icon)
+        gear.setFixedSize(chip, chip)
+        gear.setIcon(preview_settings_icon(glyph))
+        gear.setIconSize(QSize(glyph, glyph))
+        gear.setToolTip("Preview quality · Does not affect export")
+        gear.setAccessibleName("Preview quality")
+        gear.setCursor(Qt.CursorShape.PointingHandCursor)
+        gear.setStyleSheet(
+            "QPushButton { background: rgba(74, 159, 216, 46); border: 2px solid #4a9fd8;"
+            " border-radius: 7px; padding: 0; }"
+            "QPushButton:hover { background: rgba(74, 159, 216, 82); }"
+        )
+        gear.clicked.connect(self._show_preview_quality_menu)
+        self.btn_preview_settings = gear
+        actions.addWidget(gear)
+        lay.addWidget(right, 0, 2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._header = header
         return header
+
+    def _refresh_clip_health(self) -> None:
+        from steempeg.ui.express_render import express_clip_health
+
+        self._health_report = express_clip_health(self._app, self._info.path)
+        self._paint_clip_health(self._health_report)
+        self._refresh_express_tooltip()
+
+    def _paint_clip_health(self, report) -> None:
+        from steempeg.ui.player.clip_health_chrome import apply_clip_health_button
+
+        apply_clip_health_button(self._health_button, report)
+
+    def _show_clip_health(self) -> None:
+        from steempeg.ui.player.clip_health_chrome import build_clip_health_menu
+
+        report = self._health_report
+        if report is not None:
+            button = self._health_button
+            menu = build_clip_health_menu(self, report)
+            menu.exec(button.mapToGlobal(QPoint(0, button.height())))
+            menu.deleteLater()
+
+    def _show_preview_quality_menu(self) -> None:
+        from steempeg.ui.player import preview_quality as pq
+
+        menu = QMenu(self)
+        ut.set_stylesheet_if_changed(menu, pq.menu_stylesheet())
+        menu.addAction("Preview quality").setEnabled(False)
+        group = QActionGroup(menu)
+        for preset in pq.PRESETS:
+            action = menu.addAction(preset.label)
+            group.addAction(action)
+            action.setCheckable(True)
+            action.setChecked(preset.id == self._preview_quality_id)
+            action.setData(preset.id)
+        def apply_choice(action):
+            preset_id = action.data()
+            QTimer.singleShot(0, self, lambda: self._set_preview_quality(preset_id))
+
+        group.triggered.connect(apply_choice)
+        menu.addSeparator()
+        menu.addAction("Does not affect export").setEnabled(False)
+        gear = self.btn_preview_settings
+        menu.exec(gear.mapToGlobal(gear.rect().bottomLeft()))
+        menu.deleteLater()
+
+    def _set_preview_quality(self, preset_id: str) -> None:
+        from steempeg.ui.player import preview_quality as pq
+
+        if self._player is None:
+            return
+        height = pq.decoded_source_height(self._player)
+        if preset_id != "source" and not height:
+            return
+        if pq.apply_mpv_preview_quality(self._player, preset_id, source_height=height):
+            self._preview_quality_id = preset_id
+        else:
+            self._preview_quality_id = "source"
+        label = next(preset.label for preset in pq.PRESETS if preset.id == self._preview_quality_id)
+        self.btn_preview_settings.setToolTip(f"Preview quality · {label} · Does not affect export")
 
     def _build_video(self) -> QFrame:
         """Black frame holding the mpv surface."""
@@ -430,6 +547,18 @@ class ExpressPlayerWindow(QWidget):
         lay.addWidget(self._mpv_wrapper)
         self._video_frame = frame
         return frame
+
+    @property
+    def player(self):
+        return self._player
+
+    @property
+    def mpv_screen(self):
+        return self._mpv_wrapper.mpv_screen
+
+    def _on_video_surface_click(self) -> None:
+        if self.isVisible() and QApplication.activePopupWidget() is None and QApplication.activeModalWidget() is None:
+            self.toggle_play()
 
     def _build_footer(self) -> QFrame:
         """Timeline, result strip and the controls row."""
@@ -586,6 +715,7 @@ class ExpressPlayerWindow(QWidget):
             logging.exception("Express player: mpv init failed")
             self._time_label.setText("Video engine failed")
             return
+        self._install_linux_mpv_pointer_bindings()
         play_path = os.path.abspath(mpds[0]).replace("\\", "/")
         logging.info("Express player: play %s", play_path)
         self._attach_hover_preview(play_path)
@@ -926,6 +1056,7 @@ class ExpressPlayerWindow(QWidget):
             self._btn_trim.setIcon(QIcon(get_resource_path("trim_icon.png")))
             self._btn_trim.setText(" Trim")
             self._btn_trim.setStyleSheet(tok.STYLE_TRIM_BUTTON)
+        self._refresh_express_tooltip()
 
     def current_trim_ms(self) -> tuple[int, int] | None:
         """Returns the active trim range, or None when the whole clip is used."""
@@ -938,10 +1069,22 @@ class ExpressPlayerWindow(QWidget):
 
     def _refresh_express_tooltip(self) -> None:
         """Shows which recipe the Express button will use."""
+        from steempeg.core.dash.health import ClipHealth
         from steempeg.ui.express_render import load_express_preset_name
 
+        if self._render is not None and self._render.is_running:
+            return
         name = load_express_preset_name(self._app)
-        recipe = name or "Original (max quality re-encode for clips with Issues)"
+        if name:
+            recipe = name
+        elif self._health_report is None:
+            recipe = "Automatic"
+        elif self._health_report.level != ClipHealth.HEALTHY:
+            recipe = "Re-encode · clip has issues"
+        elif self.current_trim_ms() is not None:
+            recipe = "Re-encode for exact trim"
+        else:
+            recipe = "Stream copy · no re-encode"
         self._btn_express.setToolTip(f"Render now · {recipe}")
 
     def _on_express_clicked(self) -> None:
@@ -951,13 +1094,26 @@ class ExpressPlayerWindow(QWidget):
             return
         self.start_express(preset_name=None)
 
-    def start_express(self, *, preset_name: str | None) -> None:
+    def start_express(self, *, preset_name: str | None, options=None) -> None:
         """Builds and starts an Express render for this clip (trim respected)."""
+        from steempeg.ui.express_render import build_express_job, confirm_express_export
         from steempeg.ui.message_dialog import steempeg_warning
 
-        render = self._app.start_express_render(
-            self._info.path, preset_name=preset_name, trim_ms=self.current_trim_ms()
+        if self._render is not None and self._render.is_running:
+            return
+        job = build_express_job(
+            self._app, self._info.path, preset_name=preset_name,
+            trim_ms=self.current_trim_ms(), options=options,
         )
+        if job is None:
+            steempeg_warning(self, "Express render", "Could not prepare this clip for rendering.")
+            return
+        self._health_report = job.health_report
+        self._paint_clip_health(job.health_report)
+        self._refresh_express_tooltip()
+        if not confirm_express_export(self, job):
+            return
+        render = self._app.start_prepared_express_render(job)
         if render is None:
             steempeg_warning(self, "Express render", "Could not prepare this clip for rendering.")
             return
@@ -965,7 +1121,8 @@ class ExpressPlayerWindow(QWidget):
         self._result_strip.hide()
         render.progress_changed.connect(self._on_render_progress)
         render.finished.connect(self._on_render_finished)
-        self._btn_express.setToolTip("Click to cancel")
+        self._btn_arrow.setEnabled(False)
+        self._btn_express.setToolTip(f"{job.method_label} · Click to cancel")
         self._on_render_progress(0.0)
 
     def _on_render_progress(self, percent: float) -> None:
@@ -976,6 +1133,7 @@ class ExpressPlayerWindow(QWidget):
     def _on_render_finished(self, success: bool, error: str, output_file: str) -> None:
         """Resets the button and shows the result strip."""
         self._render = None
+        self._btn_arrow.setEnabled(True)
         self._btn_express.setText("⚡ Express")
         self._btn_express.setStyleSheet("")
         self._refresh_express_tooltip()
@@ -995,7 +1153,13 @@ class ExpressPlayerWindow(QWidget):
         self._result_strip.show()
 
     def _show_export_menu(self) -> None:
-        """Opens the export menu under the arrow (Steam-style)."""
+        menu = self._build_export_menu()
+        anchor = self._btn_arrow.mapToGlobal(QPoint(self._btn_arrow.width(), 0))
+        size = menu.sizeHint()
+        menu.exec(QPoint(anchor.x() - size.width(), anchor.y() - size.height() - 6))
+        menu.deleteLater()
+
+    def _build_export_menu(self) -> QMenu:
         from steempeg.render.export_presets import list_preset_names
         from steempeg.ui.express_render import load_express_preset_name
 
@@ -1007,21 +1171,19 @@ class ExpressPlayerWindow(QWidget):
         express.triggered.connect(lambda: self.start_express(preset_name=None))
         menu.addAction(express)
 
-        presets = menu.addMenu("🎛️ Render with preset")
-        auto = QAction("Automatic (Original / max for Issues)", presets)
-        auto.setCheckable(True)
-        auto.setChecked(not current)
-        auto.triggered.connect(lambda: self._render_with_preset(""))
-        presets.addAction(auto)
         names = list_preset_names(self._app.load_user_settings)
-        if names:
-            presets.addSeparator()
+        presets = menu.addMenu("🎛️ Render with preset")
+        presets.setEnabled(bool(names))
         for name in names:
-            action = QAction(name, presets)
+            presets.addAction(name).triggered.connect(lambda _=False, n=name: self.start_express(preset_name=n))
+        defaults = menu.addMenu("Use as Express default")
+        default_group = QActionGroup(defaults)
+        for label, name in [("Automatic", ""), *((name, name) for name in names)]:
+            action = defaults.addAction(label)
+            default_group.addAction(action)
             action.setCheckable(True)
-            action.setChecked(name == current)
-            action.triggered.connect(lambda _=False, n=name: self._render_with_preset(n))
-            presets.addAction(action)
+            action.setChecked(name == (current if current in names else ""))
+            action.triggered.connect(lambda _=False, n=name: self._set_express_default(n))
 
         queue = QAction("📋 Add to Render Queue", menu)
         queue.triggered.connect(self.add_to_render_queue)
@@ -1031,6 +1193,9 @@ class ExpressPlayerWindow(QWidget):
         settings = QAction("⚙️ Render settings…", menu)
         settings.triggered.connect(self.open_render_settings)
         menu.addAction(settings)
+        menu.addAction("Target File Size…").triggered.connect(
+            lambda: self.open_render_settings(target_size=True)
+        )
         open_main = QAction("🖥️ Open in Steempeg", menu)
         open_main.triggered.connect(self.open_in_steempeg)
         menu.addAction(open_main)
@@ -1042,17 +1207,13 @@ class ExpressPlayerWindow(QWidget):
         copy.triggered.connect(self.copy_last_output)
         menu.addAction(copy)
 
-        anchor = self._btn_arrow.mapToGlobal(QPoint(self._btn_arrow.width(), 0))
-        size = menu.sizeHint()
-        menu.exec(QPoint(anchor.x() - size.width(), anchor.y() - size.height() - 6))
+        return menu
 
-    def _render_with_preset(self, name: str) -> None:
-        """Remembers ``name`` as the Express preset and renders with it."""
+    def _set_express_default(self, name: str) -> None:
         from steempeg.ui.express_render import save_express_preset_name
 
         save_express_preset_name(self._app, name)
         self._refresh_express_tooltip()
-        self.start_express(preset_name=name)
 
     def add_to_render_queue(self) -> None:
         """Queues this clip (with trim) in the main Render Queue."""
@@ -1062,11 +1223,39 @@ class ExpressPlayerWindow(QWidget):
             self._btn_copy.hide()
             self._result_strip.show()
 
-    def open_render_settings(self) -> None:
-        """Hands the clip to the main editor and opens its Render Settings window."""
-        path = self._info.path
-        self.close()
-        self._app.open_new_clip_from_popup(path, open_render_settings=True)
+    def open_render_settings(self, *, target_size: bool = False) -> None:
+        """Choose one-off export settings while staying in Express Player."""
+        from steempeg.ui.express_export_dialog import ExpressExportDialog
+        from steempeg.ui.player.preview_quality import decoded_source_height
+        from steempeg.ui.settings_prefs import default_export_dir
+
+        target_job = None
+        if target_size:
+            from steempeg.ui.express_render import build_express_job
+            from steempeg.ui.message_dialog import steempeg_warning
+
+            ready = build_express_job(
+                self._app, self._info.path, preset_name="", trim_ms=self.current_trim_ms()
+            )
+            if ready is None:
+                steempeg_warning(self, "Target File Size", "Could not read the clip's source format.")
+                return
+            target_job = ready.job
+        player = self._player
+        height = decoded_source_height(player) if player is not None else 0
+        try:
+            fps = float(player.container_fps or 0) if player is not None else 0.0
+        except (AttributeError, TypeError, ValueError):
+            fps = 0.0
+        dialog = ExpressExportDialog(
+            self, source_height=height, source_fps=fps,
+            destination=getattr(self._app, "custom_destination", "") or default_export_dir(),
+            target_job=target_job,
+        )
+        options = dialog.choose()
+        dialog.deleteLater()
+        if options is not None:
+            self.start_express(preset_name="", options=options)
 
     def open_in_steempeg(self) -> None:
         """Closes the mini player and opens the clip in the full editor."""
@@ -1137,5 +1326,6 @@ class ExpressPlayerWindow(QWidget):
 
     def closeEvent(self, event) -> None:  # noqa: N802 — Qt override
         """Frees mpv; a running Express render keeps going in the background."""
+        self._remove_video_surface_click_handler()
         self._release_player()
         super().closeEvent(event)

@@ -1,8 +1,8 @@
 """Express render — one-click export of a Steam clip without the full editor.
 
 Recipe rules:
-- a named preset remembered as the last Express choice wins;
-- otherwise healthy clips use Original (stream copy, no quality loss);
+- a saved default or a one-off recipe can override the automatic choice;
+- otherwise healthy clips use Original (stream copy unless exact Trim is active);
 - clips with Issues / Dead / Cured re-encode at source resolution and bitrate,
   because stream-copying broken chunks keeps the breakage.
 
@@ -21,6 +21,7 @@ from shutil import which
 
 from PySide6.QtCore import QObject, Signal
 
+from steempeg.core.dash import health
 from steempeg.render.queue import RenderJob
 
 EXPRESS_PRESET_KEY = "express_last_preset"
@@ -36,6 +37,26 @@ class ExpressJob:
 
     job: RenderJob
     recipe_label: str
+    health_report: health.ClipHealthReport
+    explicit_destination: bool = False
+
+    @property
+    def method_label(self) -> str:
+        settings = self.job.settings
+        if settings.audio_only:
+            return "Audio export"
+        if "Original" in settings.quality_text:
+            return "Re-encode for exact trim" if settings.is_trim_mode else "Stream copy"
+        return "Re-encode"
+
+
+@dataclass(frozen=True)
+class ExpressExportOptions:
+    height: int | None
+    fps: int | None
+    codec: str
+    destination: str
+    target_mb: int | None = None
 
 
 def load_express_preset_name(app) -> str:
@@ -55,29 +76,23 @@ def save_express_preset_name(app, name: str) -> None:
         logging.exception("Express: could not save last preset")
 
 
-def clip_needs_reencode(app, clip_path: str) -> bool:
-    """Checks whether the clip is anything but Healthy (stream copy would keep the damage)."""
-    from steempeg.core.dash import health
-
+def express_clip_health(app, clip_path: str) -> health.ClipHealthReport:
     try:
-        report = app.get_clip_health_report(clip_path)
+        display_report = getattr(app, "get_clip_display_health_report", None)
+        return (display_report or app.get_clip_health_report)(clip_path)
     except Exception:
-        report = health.assess_clip_health(clip_path, probe=False)
-    return report.level != health.ClipHealth.HEALTHY
+        return health.assess_clip_health(clip_path, probe=False)
 
 
-def apply_max_reencode(job: RenderJob) -> None:
+def apply_max_reencode(job: RenderJob, *, source_height: int, height: int | None = None) -> None:
     """Switches a job from stream copy to a re-encode at source height and source bitrate."""
     from steempeg.render.quality_presets import format_quality_item
 
     settings = job.settings
-    match = re.search(r"(\d+)p", settings.quality_text or "")
-    height = int(match.group(1)) if match else 1080
-    settings.quality_text = format_quality_item(height)
+    settings.quality_text = format_quality_item(min(source_height, height or source_height))
     settings.bitrate_text = "Custom"
     settings.custom_vbitrate = float(settings.orig_video_mbps or 0) or 50.0
     settings.output_preset = f"Express: {MAX_REENCODE_LABEL}"
-    job.refresh_output_path()
 
 
 def build_express_job(
@@ -86,6 +101,7 @@ def build_express_job(
     *,
     preset_name: str | None = None,
     trim_ms: tuple[int, int] | None = None,
+    options: ExpressExportOptions | None = None,
 ) -> ExpressJob | None:
     """Builds the Express render job for a clip folder.
 
@@ -119,6 +135,31 @@ def build_express_job(
     if job is None:
         return None
 
+    report = express_clip_health(app, clip_path)
+    source = re.search(r"(\d+)p", job.settings.quality_text or "")
+    source_height = int(source.group(1)) if source else 1080
+    if options is not None:
+        apply_max_reencode(job, source_height=source_height, height=options.height)
+        settings = job.settings
+        settings.output_preset = "Express: Custom settings"
+        settings.save_dir = options.destination or settings.save_dir
+        settings.codec_text = options.codec
+        if options.fps is not None:
+            settings.fps_text = "Custom FPS"
+            settings.custom_fps = options.fps
+        recipe = "Custom settings"
+        if options.target_mb is not None:
+            from steempeg.render.quality_presets import TARGET_FILE_SIZE_LABEL
+            from steempeg.render.target_size import retarget_job_file_size
+
+            settings.quality_text = TARGET_FILE_SIZE_LABEL
+            settings.custom_target_mb = options.target_mb
+            recipe = "Target File Size"
+            settings.output_preset = f"Express: {recipe}"
+            if retarget_job_file_size(job) is None:
+                return None
+        return ExpressJob(job, recipe, report, bool(options.destination))
+
     name = load_express_preset_name(app) if preset_name is None else preset_name.strip()
     if name:
         preset = get_preset_settings(name, app.load_user_settings)
@@ -127,13 +168,40 @@ def build_express_job(
 
             preset = preset_settings_for_plan(app, preset, name)
             apply_preset_to_job(job, preset, preset_name=name)
-            return ExpressJob(job, name)
+            if report.level != health.ClipHealth.HEALTHY and "Original" in job.settings.quality_text and not job.settings.audio_only:
+                apply_max_reencode(job, source_height=source_height)
+            return ExpressJob(job, name, report)
         logging.warning("Express: preset %r is gone, using the automatic recipe", name)
 
-    if clip_needs_reencode(app, clip_path):
-        apply_max_reencode(job)
-        return ExpressJob(job, MAX_REENCODE_LABEL)
-    return ExpressJob(job, AUTO_RECIPE_LABEL)
+    if report.level != health.ClipHealth.HEALTHY:
+        apply_max_reencode(job, source_height=source_height)
+        return ExpressJob(job, MAX_REENCODE_LABEL, report)
+    return ExpressJob(job, AUTO_RECIPE_LABEL, report)
+
+
+def confirm_express_export(parent, express_job: ExpressJob) -> bool:
+    report = express_job.health_report
+    if report.level == health.ClipHealth.HEALTHY:
+        return True
+
+    from steempeg.infra.paths import get_resource_path
+    from steempeg.ui.message_dialog import DialogButton, SteempegMessageDialog
+
+    audio_only = express_job.job.settings.audio_only
+    action = "Continue export" if audio_only else "Re-encode and export"
+    detail = "Missing audio may still be unrecoverable." if audio_only else (
+        "Express will re-encode the video. Missing frames or audio may still be unrecoverable."
+    )
+    dialog = SteempegMessageDialog(
+        f"Clip health · {report.label}",
+        "This recording has issues. Joining the original Steam chunks without re-encoding "
+        f"can carry those issues into the export. {detail}",
+        parent,
+        detail="\n".join(report.issues[:3]) or None,
+        bar_icon=get_resource_path(health.WARNING_ICON_FILE),
+        buttons=(DialogButton("Cancel"), DialogButton(action, "primary", accept=True)),
+    )
+    return bool(dialog.exec())
 
 
 class ExpressRender(QObject):
@@ -172,12 +240,14 @@ class ExpressRender(QObject):
         from steempeg.ui.render_job_builder import resolve_render_params
         from steempeg.ui.render_thread import RenderThread
         from steempeg.infra.render_priority import load_render_priority
-        from steempeg.ui.settings_prefs import resolve_app_export_folder
+        from steempeg.ui.settings_prefs import ensure_usable_export_folder
 
         job = self._express_job.job
-        job.settings.save_dir = resolve_app_export_folder(
-            self._app, job.settings.save_dir or None, notify=False
-        )
+        folder, fell_back = ensure_usable_export_folder(job.settings.save_dir or None)
+        if fell_back and self._express_job.explicit_destination:
+            self.finished.emit(False, "The selected export folder is not writable.", "")
+            return False
+        job.settings.save_dir = folder
         job.refresh_output_path()
 
         ffmpeg_exe = resolve_ffmpeg_exe()
