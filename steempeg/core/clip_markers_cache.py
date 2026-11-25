@@ -21,6 +21,7 @@ import re
 from typing import Any
 
 from steempeg.infra.cache import write_text_atomic
+from steempeg.core.steam_recording_metadata import recording_timelines
 
 _log = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ STEEMPEG_TIMELINE_NAME = "steempeg_timeline.json"
 # Steam clip.pb embeds the timeline basename (no extension), e.g.
 # timeline_73020260521_204100 (app+date digits, then _HHMMSS).
 _CLIP_PB_TIMELINE_RE = re.compile(rb"timeline_\d+_\d+")
+_RECORDING_FOLDER_RE = re.compile(r"(?:bg|fg)_(\d+)_(\d{8}_\d{6})", re.IGNORECASE)
 
 
 def _norm_key_path(path: str | None) -> str:
@@ -125,42 +127,54 @@ def _steam_timeline_in_dir(
     return None
 
 
-def find_steam_timeline_json(clip_path: str | None) -> str | None:
+def find_steam_timeline_json(
+    clip_path: str | None, *, recording_id: str | None = None
+) -> str | None:
     """Locate Steam's ``timeline_*.json`` for a clip folder (never steempeg)."""
     root = _clip_folder(clip_path)
     if not root:
         return None
 
-    prefer = timeline_basename_from_clip_pb(root)
+    rows = recording_timelines(os.path.join(root, "clip.pb")) if recording_id else []
+    prefer = next((name for name, rec, _ in rows if rec == recording_id), None)
+    prefer = prefer or timeline_basename_from_clip_pb(root)
 
-    # 1) Clip root (classic Steam userdata layout).
-    found = _steam_timeline_in_dir(root, prefer_name=prefer)
-    if found:
-        return found
-
-    # 2) Nested <clip>/timelines/ (mirrored / multi-library Game Recording trees).
-    found = _steam_timeline_in_dir(
-        os.path.join(root, "timelines"), prefer_name=prefer
-    )
-    if found:
-        return found
-
-    # 3) clip.pb name in parent / grandparent timelines/ (flat library store).
+    local_dirs = (root, os.path.join(root, "timelines"))
+    parent = os.path.dirname(root)
     if prefer:
-        parent = os.path.dirname(root)
-        candidates = [
-            os.path.join(parent, "timelines", prefer),
-            os.path.join(os.path.dirname(parent), "timelines", prefer),
-        ]
-        for path in candidates:
+        # An exact clip.pb reference always beats a stray JSON in the clip root.
+        for directory in (*local_dirs, os.path.join(parent, "timelines"),
+                          os.path.join(os.path.dirname(parent), "timelines")):
+            path = os.path.join(directory, prefer)
             if os.path.isfile(path):
                 return path
+        return None
+    for directory in local_dirs:
+        found = _steam_timeline_in_dir(directory)
+        if found:
+            return found
 
-    # 4) Legacy …/video/<clip> → …/timelines/<clip>/.
-    parent = os.path.dirname(root)
+    # 4) Standalone recordings keep video and timeline in sibling directories.
     if os.path.basename(parent).lower() == "video":
+        recording_root = os.path.dirname(parent)
+        timelines_dir = os.path.join(recording_root, "timelines")
+        rec_id = os.path.basename(root)
+        for name, rec, _ in recording_timelines(os.path.join(recording_root, "gamerecording.pb")):
+            if rec == rec_id:
+                path = os.path.join(timelines_dir, name)
+                if os.path.isfile(path):
+                    return path
+        recording = _RECORDING_FOLDER_RE.fullmatch(os.path.basename(root))
+        if recording:
+            app_id, stamp = recording.groups()
+            for name in (f"timeline_{app_id}{stamp}.json", f"timeline_{app_id}_{stamp}.json"):
+                path = os.path.join(timelines_dir, name)
+                if os.path.isfile(path):
+                    return path
+
+        # Legacy …/video/<clip> → …/timelines/<clip>/.
         found = _steam_timeline_in_dir(
-            os.path.join(os.path.dirname(parent), "timelines", os.path.basename(root)),
+            os.path.join(timelines_dir, os.path.basename(root)),
             prefer_name=prefer,
         )
         if found:
@@ -169,13 +183,15 @@ def find_steam_timeline_json(clip_path: str | None) -> str | None:
     return None
 
 
-def find_clip_timeline_json(clip_path: str | None) -> str | None:
+def find_clip_timeline_json(
+    clip_path: str | None, *, recording_id: str | None = None
+) -> str | None:
     """Resolve Steam timeline JSON, else ``steempeg_timeline.json``.
 
     Always prefers a real Steam ``timeline_*.json`` over an empty or partial
     Steempeg sidecar in the clip root (that sidecar must not shadow Steam).
     """
-    steam = find_steam_timeline_json(clip_path)
+    steam = find_steam_timeline_json(clip_path, recording_id=recording_id)
     if steam:
         return steam
     steempeg = steempeg_timeline_path(clip_path)

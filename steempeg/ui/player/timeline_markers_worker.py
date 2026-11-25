@@ -12,12 +12,26 @@ from PySide6.QtCore import QThread, Signal
 _log = logging.getLogger(__name__)
 
 
-def timeline_offset_ms(json_path: str | None, mpd_path: str) -> int:
+def timeline_offset_ms(
+    json_path: str | None, mpd_path: str, clip_path: str | None = None
+) -> int:
     """Align Steam timeline timestamps with the active MPD video folder."""
     if not json_path or not mpd_path:
         return 0
     json_name = os.path.basename(json_path)
     video_folder_name = os.path.basename(os.path.dirname(mpd_path))
+    if clip_path:
+        from steempeg.core.steam_recording_metadata import recording_timelines
+
+        metadata_paths = [os.path.join(clip_path, "clip.pb")]
+        parent = os.path.dirname(clip_path)
+        if os.path.basename(parent).lower() == "video":
+            metadata_paths.append(os.path.join(os.path.dirname(parent), "gamerecording.pb"))
+        for path in metadata_paths:
+            for name, recording_id, offset in recording_timelines(path):
+                if name == json_name and recording_id == video_folder_name and offset is not None:
+                    _log.debug("Timeline offset: Steam metadata %s (%d ms)", os.path.basename(path), offset)
+                    return offset
     json_match = re.search(r"(\d{8})_(\d{6})", json_name)
     video_match = re.search(r"(\d{8})_(\d{6})", video_folder_name)
     if not (json_match and video_match):
@@ -257,7 +271,8 @@ class TimelineMarkersLoadWorker(QThread):
                 except Exception:
                     _log.debug("Markers worker MPD probe failed", exc_info=True)
 
-            json_path = find_clip_timeline_json(self._clip_path)
+            recording_id = os.path.basename(os.path.dirname(mpd_path))
+            json_path = find_clip_timeline_json(self._clip_path, recording_id=recording_id)
             if not json_path or (
                 not is_steam_timeline_json(json_path)
                 and not is_steempeg_timeline_json(json_path)
@@ -272,7 +287,7 @@ class TimelineMarkersLoadWorker(QThread):
                 return
 
             result["json_path"] = json_path
-            result["offset_ms"] = timeline_offset_ms(json_path, mpd_path)
+            result["offset_ms"] = timeline_offset_ms(json_path, mpd_path, self._clip_path)
             use_cache = bool(json_path and is_steam_timeline_json(json_path))
             result["use_cache"] = use_cache
             result["app_id"] = app_id_from_clip_paths(json_path, self._clip_path)
@@ -287,6 +302,13 @@ class TimelineMarkersLoadWorker(QThread):
                     merge_marker_cache=use_cache,
                 )
                 result.update(payload)
+                _log.debug(
+                    "Timeline markers: recording=%s source=%s offset_ms=%s markers=%d",
+                    os.path.basename(self._clip_path),
+                    os.path.basename(json_path),
+                    result["offset_ms"],
+                    len(payload["markers"]),
+                )
             else:
                 # No Steam/Steempeg file — still restore user cache markers.
                 try:
@@ -303,6 +325,11 @@ class TimelineMarkersLoadWorker(QThread):
                 result["clip_ranges"] = []
                 result["remembered_ids"] = []
                 result["json_start_utc"] = None
+                _log.debug(
+                    "Timeline markers: no JSON for recording=%s cached_markers=%d",
+                    os.path.basename(self._clip_path),
+                    len(markers),
+                )
         except Exception as exc:
             _log.exception("Timeline markers load worker failed")
             result["error"] = str(exc)
