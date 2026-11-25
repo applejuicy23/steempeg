@@ -1,14 +1,15 @@
 [project]
 name = "steempeg"
-version = "30.0"
-description = "Smart tool for recovering, trimming and rendering Steam Game Recording (DASH) clips"
+dynamic = ["version"]
+description = "Browse, recover, trim, and export Steam Game Recording clips with hardware-accelerated rendering."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "GPL-3.0-or-later" }
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 authors = [
     { name = "applejuicy23" },
 ]
-keywords = ["steam", "game-recording", "dash", "ffmpeg", "mpv", "video", "clips"]
+keywords = ["steam", "steam-deck", "game-recording", "dash", "video-export", "video-trimming", "ffmpeg", "mpv"]
 
 dependencies = [
     "PySide6",
@@ -23,6 +24,9 @@ dependencies = [
 dev = ["ruff"]
 
 [project.urls]
+Homepage = "https://applejuicy23.github.io/steempeg/"
+Documentation = "https://applejuicy23.github.io/steempeg/docs/"
+Changelog = "https://applejuicy23.github.io/steempeg/changelog.html"
 Repository = "https://github.com/applejuicy23/steempeg"
 Issues = "https://github.com/applejuicy23/steempeg/issues"
 
@@ -30,11 +34,14 @@ Issues = "https://github.com/applejuicy23/steempeg/issues"
 steempeg = "steempeg.app:main"
 
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["steempeg*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "steempeg.version.APP_VERSION_STR" }
 
 [tool.ruff]
 line-length = 100
