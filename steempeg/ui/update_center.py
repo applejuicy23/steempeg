@@ -71,7 +71,7 @@ _PLATFORM_ASSET = {
     "steamdeck": "steamdeck.png",
 }
 
-def _release_date_label(published: str) -> str:
+def release_date_label(published: str) -> str:
     """``2026-10-28T…`` → ``28 Oct 2026``. Empty when the catalog has no date."""
     text = (published or "").strip()
     if len(text) < 10 or text[4] != "-" or text[7] != "-":
@@ -508,7 +508,7 @@ class _ReleaseNotesImageLoader(QObject):
         _insert_note_image(self._edit, placeholder, pixmap)
 
 
-def _render_release_notes(edit: QTextEdit, body: str, loader_parent: QObject) -> _ReleaseNotesImageLoader | None:
+def render_release_notes(edit: QTextEdit, body: str, loader_parent: QObject) -> _ReleaseNotesImageLoader | None:
     images = _apply_notes_markdown(edit, body)
     if not images:
         return None
@@ -1311,8 +1311,8 @@ class UpdateCenterDialog(SteempegDialog):
                 widget.set_selected_entry(entry)
         ver = (entry.version_str or "").strip() or "?"
         self._notes_label.setText(f"What's new in v{ver}")
-        self._notes_date.setText(_release_date_label(entry.published_at))
-        self._notes_image_loader = _render_release_notes(self._notes, entry.body, self)
+        self._notes_date.setText(release_date_label(entry.published_at))
+        self._notes_image_loader = render_release_notes(self._notes, entry.body, self)
 
         notice = selection_notice(entry, APP_VERSION_FLOAT)
         if notice:
