@@ -6807,6 +6807,11 @@ def main():
         except Exception:
             pass
 
+    if sys.platform.startswith("linux") and os.environ.get("STEEMPEG_PACK_ROOT"):
+        # The portable GLib can crash when Qt delegates file icons or dialogs to host GTK.
+        os.environ["QT_QPA_PLATFORMTHEME"] = "generic"
+        QApplication.setAttribute(_Qt.ApplicationAttribute.AA_DontUseNativeDialogs)
+
     app = QApplication(sys.argv)
     app.setApplicationName("Steempeg")
     app.setApplicationDisplayName("Steempeg")
