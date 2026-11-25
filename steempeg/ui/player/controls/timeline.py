@@ -1646,7 +1646,7 @@ class TimelineCanvas(QWidget):
                 if bx - ax > 0:
                     painter.drawLine(int(ax), dash_y, int(bx), dash_y)
 
-        for marker in getattr(self, 'markers', []):
+        for marker in self._markers_in_duration():
             if marker['is_round']:
                 m_x = self.ms_to_x(marker['time_ms'])
                 # Draw a 2px-wide tick mark over the purple background,
@@ -1782,7 +1782,7 @@ class TimelineCanvas(QWidget):
         marker_width = float(TIMELINE_MARKER_LOGICAL)
 
         # Sort the markers by time to ensure rendering proceeds strictly from left to right!
-        sorted_markers = sorted(getattr(self, 'markers', []), key=lambda m: m['time_ms'])
+        sorted_markers = sorted(self._markers_in_duration(), key=lambda m: m['time_ms'])
         pin_a = max(0.0, min(1.0, float(getattr(self, "_marker_pin_opacity", 1.0) or 1.0)))
         
         for marker in sorted_markers:
@@ -1800,7 +1800,7 @@ class TimelineCanvas(QWidget):
                 painter.setOpacity(1.0) # Make sure to reset it for the next one!
                 
         # 2. TOP LAYER: Draw the hovered icon (Always 100% visible on top!)
-        if hovered_m and hovered_m in getattr(self, 'markers', []):
+        if hovered_m and hovered_m in sorted_markers:
             painter.setOpacity(pin_a)
             draw_marker(hovered_m, True)
             painter.setOpacity(1.0)
@@ -1848,6 +1848,11 @@ class TimelineCanvas(QWidget):
             painter.drawImage(QPointF(0.0, 0.0), self.master_scroller_img)
             
             painter.restore()
+
+    def _markers_in_duration(self):
+        """Keep events from outside this clip off its timeline and hit targets."""
+        return (marker for marker in self.markers
+                if 0 <= marker["time_ms"] <= self.duration_ms)
 
     def ms_to_x(self, ms):
         pad = 12.0
@@ -1963,7 +1968,7 @@ class TimelineCanvas(QWidget):
         # so the neighbour showed that text and then the card clipped it.
         best = None
         best_dx = None
-        for marker in getattr(self, "markers", []):
+        for marker in self._markers_in_duration():
             m_x = self.ms_to_x(marker["time_ms"])
             pix = self.get_icon_pixmap(marker)
             if pix:
