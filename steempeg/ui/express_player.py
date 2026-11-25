@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
 
 from PySide6.QtCore import QMimeData, QPoint, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QCursor, QGuiApplication, QIcon, QKeySequence, QPixmap, QShortcut
@@ -29,11 +30,14 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui.icon_assets import tinted_pixmap
+from steempeg.ui.player.mpv_osd import MpvPlayPausePulse
 from steempeg.ui.player.surface_input import VideoSurfaceInput
-from steempeg.ui.pro_appearance import themed_asset_path
+from steempeg.ui.pro_appearance import set_accent_stylesheet, themed_asset_path
 from steempeg.services.new_clip_watcher import NewClipInfo
 from steempeg.ui import design_tokens as tok
 from steempeg.ui import ui_theme as ut
+from steempeg.ui.widgets import ElidedLabel
 
 _TOP_STRIP_H = 30
 _SKIP_MS = 15000
@@ -126,7 +130,7 @@ def build_express_player_qss() -> str:
         border-radius: 10px;
     }}
     QLabel#ExpressResultText {{
-        color: #e0e0e0; font-family: {tok.FONT_APP}; font-size: 12px; font-weight: bold;
+        color: {tok.TEXT_TITLE}; font-family: {tok.FONT_APP}; font-size: 13px; font-weight: bold;
         background: transparent; border: none;
     }}
     """
@@ -281,7 +285,7 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         self._info = info
         self._player = None
         self._duration_ms = 0
-        self._last_position_ms: float | None = None
+        self._replay_deadline: float | None = None
         self._was_playing_before_drag = False
         self._render = None
         self._last_output = ""
@@ -313,6 +317,7 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
 
         body.addWidget(self._build_header())
         body.addWidget(self._build_video(), 1)
+        self._play_pause_pulse = MpvPlayPausePulse(lambda: self._player, self.mpv_screen)
         body.addWidget(self._build_footer())
         self.install_video_surface_click_handler()
 
@@ -557,8 +562,12 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         return self._mpv_wrapper.mpv_screen
 
     def _on_video_surface_click(self) -> None:
-        if self.isVisible() and QApplication.activePopupWidget() is None and QApplication.activeModalWidget() is None:
-            self.toggle_play()
+        if (
+            self.isVisible()
+            and QApplication.activePopupWidget() is None
+            and QApplication.activeModalWidget() is None
+        ):
+            self.toggle_play(pulse=True)
 
     def _build_footer(self) -> QFrame:
         """Timeline, result strip and the controls row."""
@@ -667,17 +676,31 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         lay = QHBoxLayout(strip)
         lay.setContentsMargins(12, 6, 8, 6)
         lay.setSpacing(8)
-        self._result_text = QLabel("")
+        self._result_check = QLabel()
+        self._result_check.setFixedSize(16, 16)
+        self._result_check.setPixmap(tinted_pixmap("success.png", "#94dc83", 16))
+        self._result_check.hide()
+        lay.addWidget(self._result_check, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._result_text = ElidedLabel("")
         self._result_text.setObjectName("ExpressResultText")
+        self._result_text.setTextFormat(Qt.TextFormat.PlainText)
         lay.addWidget(self._result_text, 1)
         self._btn_show_folder = QPushButton("Show in folder")
         self._btn_copy = QPushButton("Copy")
-        for btn in (self._btn_show_folder, self._btn_copy):
-            btn.setObjectName("ExpressPill")
+        self._btn_open_queue = QPushButton("Open in Steempeg")
+        self._btn_open_queue.setToolTip("Show Render Queue in the main Steempeg window")
+        for btn in (self._btn_show_folder, self._btn_copy, self._btn_open_queue):
+            set_accent_stylesheet(
+                btn,
+                ut.dash_secondary_button_stylesheet(radius=16, pad="4px 12px")
+                + "QPushButton:focus:enabled { border-color: #b29ae7; }",
+            )
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             lay.addWidget(btn)
         self._btn_show_folder.clicked.connect(self.show_last_output_in_folder)
         self._btn_copy.clicked.connect(self.copy_last_output)
+        self._btn_open_queue.clicked.connect(self._app.open_render_queue_from_express)
+        self._btn_open_queue.hide()
         close = QPushButton("✕")
         close.setObjectName("ExpressFlat")
         close.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -686,6 +709,12 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         strip.hide()
         self._result_strip = strip
         return strip
+
+    def _set_result_message(self, text: str, *, confirmed: bool = False) -> None:
+        self._result_text.setText(text)
+        self._result_text.setToolTip(text)
+        self._result_check.setVisible(confirmed)
+        self._btn_open_queue.hide()
 
     def _make_icon_button(self, asset: str, icon_px: int, tip: str, *, box: int = 40) -> QPushButton:
         """Round transparent button with a bundled icon."""
@@ -721,7 +750,7 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         self._attach_hover_preview(play_path)
         self._prefetch_marker_sprite()
         self._load_timeline_marks(play_path)
-        self._last_position_ms = None
+        self._replay_deadline = None
         self._player.play(play_path)
         self._player.pause = False
         self._poll.start()
@@ -912,21 +941,16 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         if duration and int(duration * 1000) != self._duration_ms:
             self._duration_ms = int(duration * 1000)
             self._timeline.set_duration(self._duration_ms)
-        position_ms = float(position or 0.0) * 1000.0
+        if position is None and not at_end:
+            return
+        position_ms = float(position) * 1000.0 if position is not None else self._duration_ms
         playing = not paused and not at_end
-        canvas = self._timeline.canvas
-        previous_ms = self._last_position_ms
-        if position is not None:
-            self._last_position_ms = position_ms
-        if (
-            playing
-            and canvas.is_trim_mode
-            and canvas.trim_end_ms > canvas.trim_start_ms
-            and previous_ms is not None
-            and previous_ms < canvas.trim_end_ms <= position_ms
-        ):
-            self._seek_ms(canvas.trim_start_ms)
-            position_ms = canvas.trim_start_ms
+        if self._replay_deadline is not None:
+            # mpv can still expose the previous frame and EOF while a jump is settling.
+            if (at_end or position_ms > 1000) and time.monotonic() < self._replay_deadline:
+                return
+            self._replay_deadline = None
+            self._timeline.force_jump(position_ms, seek=False)
         self._timeline.set_vlc_time(position_ms, playing)
         self._time_label.setText(
             f"{format_player_time(position_ms)} / {format_player_time(self._duration_ms)}"
@@ -936,21 +960,25 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
             self._btn_play.setProperty("glyph", icon)
             self._btn_play.setIcon(QIcon(themed_asset_path(icon)))
 
-    def toggle_play(self) -> None:
-        """Plays or pauses; restarts from the beginning (or trim start) at the end."""
+    def toggle_play(self, *, pulse: bool = False) -> None:
+        """Plays or pauses the full clip, restarting it at EOF."""
         player = self._player
         if player is None:
             return
         try:
-            if bool(player.eof_reached) or (
-                self._duration_ms and (player.time_pos or 0) * 1000 >= self._duration_ms - 50
+            if self._replay_deadline is None and (
+                bool(player.eof_reached) or (
+                    self._duration_ms and (player.time_pos or 0) * 1000 >= self._duration_ms - 50
+                )
             ):
-                canvas = self._timeline.canvas
-                start = canvas.trim_start_ms if canvas.is_trim_mode else 0
-                self._seek_ms(start)
-                player.pause = False
-                return
-            player.pause = not player.pause
+                if not self._restart_playback():
+                    return
+                paused = False
+            else:
+                paused = not player.pause
+            player.pause = paused
+            if pulse:
+                self._play_pause_pulse.pulse(paused=paused)
         except Exception:
             logging.debug("Express player: toggle play failed", exc_info=True)
 
@@ -961,19 +989,31 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         target = max(0.0, min(float(self._duration_ms), self._timeline.canvas.visual_ms + delta_ms))
         self._timeline.force_jump(target)
 
-    def _seek_ms(self, ms: float) -> None:
+    def _restart_playback(self) -> bool:
+        player = self._player
+        path = player.path if sys.platform.startswith("linux") else None
+        if path and path.lower().endswith(".mpd"):
+            # Seeking a completed DASH stream can leave the Linux demuxer at EOF.
+            player.loadfile(path, start=0)
+        elif not self._seek_ms(0):
+            return False
+        self._replay_deadline = time.monotonic() + 1.5
+        self._timeline.force_jump(0, seek=False)
+        return True
+
+    def _seek_ms(self, ms: float) -> bool:
         """Seeks mpv to an absolute position in milliseconds."""
         if self._player is None:
-            return
+            return False
         target_ms = max(0.0, ms)
         try:
             self._player.seek(target_ms / 1000.0, reference="absolute", precision="exact")
         except Exception:
             logging.debug("Express player: seek failed", exc_info=True)
+            return False
         else:
-            # Start measuring playback from the seek destination. A jump past
-            # the trim end must not count as playing through that boundary.
-            self._last_position_ms = target_ms
+            self._replay_deadline = None
+            return True
 
     def _on_timeline_press(self) -> None:
         """Pauses while the playhead is dragged."""
@@ -1139,15 +1179,15 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         self._refresh_express_tooltip()
         if success and output_file:
             self._last_output = output_file
-            self._result_text.setText(f"✓ Saved · {os.path.basename(output_file)}")
+            self._set_result_message(f"Saved · {os.path.basename(output_file)}", confirmed=True)
             self._btn_show_folder.show()
             self._btn_copy.show()
         elif "cancel" in (error or "").lower():
-            self._result_text.setText("Render cancelled")
+            self._set_result_message("Render cancelled")
             self._btn_show_folder.hide()
             self._btn_copy.hide()
         else:
-            self._result_text.setText(f"Render failed · {error or 'unknown error'}")
+            self._set_result_message(f"Render failed · {error or 'unknown error'}")
             self._btn_show_folder.hide()
             self._btn_copy.hide()
         self._result_strip.show()
@@ -1176,7 +1216,7 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         presets.setEnabled(bool(names))
         for name in names:
             presets.addAction(name).triggered.connect(lambda _=False, n=name: self.start_express(preset_name=n))
-        defaults = menu.addMenu("Use as Express default")
+        defaults = menu.addMenu("⭐ Use as Express default")
         default_group = QActionGroup(defaults)
         for label, name in [("Automatic", ""), *((name, name) for name in names)]:
             action = defaults.addAction(label)
@@ -1193,7 +1233,7 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         settings = QAction("⚙️ Render settings…", menu)
         settings.triggered.connect(self.open_render_settings)
         menu.addAction(settings)
-        menu.addAction("Target File Size…").triggered.connect(
+        menu.addAction("📏 Target File Size…").triggered.connect(
             lambda: self.open_render_settings(target_size=True)
         )
         open_main = QAction("🖥️ Open in Steempeg", menu)
@@ -1218,9 +1258,10 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
     def add_to_render_queue(self) -> None:
         """Queues this clip (with trim) in the main Render Queue."""
         if self._app.add_express_clip_to_queue(self._info.path, trim_ms=self.current_trim_ms()):
-            self._result_text.setText("✓ Added to Render Queue")
+            self._set_result_message("Added to Render Queue", confirmed=True)
             self._btn_show_folder.hide()
             self._btn_copy.hide()
+            self._btn_open_queue.show()
             self._result_strip.show()
 
     def open_render_settings(self, *, target_size: bool = False) -> None:
@@ -1274,7 +1315,7 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         """Copies the last Express render file to the clipboard."""
         if self._last_output and os.path.isfile(self._last_output):
             copy_file_to_clipboard(self._last_output)
-            self._result_text.setText(f"📎 Copied · {os.path.basename(self._last_output)}")
+            self._set_result_message(f"Copied · {os.path.basename(self._last_output)}", confirmed=True)
             self._result_strip.show()
 
     # -- delete / close -------------------------------------------------------
@@ -1316,6 +1357,7 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
                 logging.debug("Express player: sniper stop failed", exc_info=True)
         self._timeline.current_video_path = ""
         player = self._player
+        self._play_pause_pulse.cancel()
         self._player = None
         if player is None:
             return

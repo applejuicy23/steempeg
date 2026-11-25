@@ -2088,6 +2088,24 @@ class RenderMixin:
         elif choice == RenderCompleteChoice.OPEN_HISTORY:
             self.show_render_queue_history()
 
+    def open_render_queue_from_express(self) -> None:
+        """Raise Steempeg and reveal the queue without starting it."""
+        self.bring_main_window_forward()
+        if getattr(self, "_portable_shell", False):
+            from steempeg.ui.portable.chrome import open_portable_render_settings
+
+            open_portable_render_settings(self)
+            return
+
+        if getattr(self, "is_fullscreen", False):
+            self.toggle_fullscreen()
+        if getattr(self, "is_theater", False):
+            self.toggle_theater_mode()
+        self.render_queue_panel.show_page("queue")
+        if not self._queue_hover_is_floating():
+            self._queue_user_collapsed = False
+        self._set_queue_pane_closed(False)
+
     def show_render_queue_history(self) -> None:
         from steempeg.ui.render_queue_history import RenderQueueHistoryDialog
 
