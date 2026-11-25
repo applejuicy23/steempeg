@@ -36,6 +36,7 @@ _BROWSER_HEADERS = {
 _STEAMCMD_INFO_URL = "https://api.steamcmd.net/v1/info/{app_id}"
 _MARKERS_CDN_BASE = "https://shared.fastly.steamstatic.com/app_config/timeline"
 _APP_ID_FROM_PATH_RE = re.compile(r"(?:timeline|clip|fg|bg)_(\d+)_", re.IGNORECASE)
+_TIMELINE_APP_ID_RE = re.compile(r"timeline_(\d+)_?\d{8}_\d{6}\.json", re.IGNORECASE)
 
 
 def app_id_from_clip_paths(json_path=None, clip_path=None):
@@ -43,7 +44,11 @@ def app_id_from_clip_paths(json_path=None, clip_path=None):
     for raw in (json_path, clip_path):
         if not raw:
             continue
-        m = _APP_ID_FROM_PATH_RE.search(str(raw).replace("\\", "/"))
+        path = str(raw).replace("\\", "/")
+        timeline_match = _TIMELINE_APP_ID_RE.fullmatch(os.path.basename(path))
+        if timeline_match:
+            return timeline_match.group(1)
+        m = _APP_ID_FROM_PATH_RE.search(path)
         if m:
             return m.group(1)
     return None
