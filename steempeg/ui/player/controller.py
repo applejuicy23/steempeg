@@ -1211,7 +1211,8 @@ class PlayerMixin(VideoSurfaceInput):
             logging.debug("[video-click] toggle ignored: no player")
             return
         try:
-            if getattr(self.player, 'path', None) is None:
+            path = self.player.path
+            if path is None:
                 return
         except Exception:
             # Dead libmpv core — drop handle; next clip click recreates it.
@@ -1242,7 +1243,18 @@ class PlayerMixin(VideoSurfaceInput):
                         pos = None
                     at_end = bool(dur and pos is not None and float(pos) >= float(dur) - 0.05)
                 if at_end:
-                    if not self._safe_mpv_seek(0):
+                    if (
+                        sys.platform.startswith("linux")
+                        and str(path).lower().endswith(".mpd")
+                        and not getattr(self, "_is_switching", False)
+                        and not getattr(self, "_awaiting_first_frame", False)
+                    ):
+                        # The Linux DASH demuxer can return EOF again after a seek.
+                        logging.debug("Restarting Linux DASH preview after EOF")
+                        self.player.play(path)
+                        self._ignore_vlc_until = time.time() + 0.75
+                        self._kick_linux_embed_surface()
+                    elif not self._safe_mpv_seek(0):
                         return
                     self._restart_from_eof = True
                     self._ignore_playback_stall(0.5)
