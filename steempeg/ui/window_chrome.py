@@ -16,6 +16,7 @@ from ctypes import POINTER, cast, wintypes
 
 from PySide6.QtCore import (
     QAbstractNativeEventFilter,
+    QEasingCurve,
     QEvent,
     QObject,
     QPoint,
@@ -26,6 +27,7 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
     Signal,
+    QVariantAnimation,
 )
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
@@ -561,6 +563,67 @@ def force_app_cursor_resync() -> None:
         _traffic_hand_override = False
 
 
+class _ReleaseNoticeBell(QPushButton):
+    def __init__(self, icon, icon_px: int, hit_px: int):
+        super().__init__()
+        self._bell_icon = icon
+        self._icon_px = icon_px
+        self._unread = False
+        self._tilt = QVariantAnimation(self)
+        self._tilt.setStartValue(0.0)
+        self._tilt.setEndValue(-17.0)
+        self._tilt.setDuration(135)
+        self._tilt.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self._tilt.valueChanged.connect(lambda _angle: self.update())
+        self.setObjectName("TitleBarReleaseNotices")
+        self.setFixedSize(hit_px, hit_px)
+        self.setFlat(True)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Announcements")
+        self.setAccessibleName("Announcements")
+
+    def set_unread(self, count: int, *, important: bool) -> None:
+        self._unread = count > 0
+        label = f"Announcements · {count} unread" if count else "Announcements"
+        if important:
+            label += " · Important notice"
+        self.setToolTip(label)
+        self.setAccessibleName(label)
+        self.update()
+
+    def set_panel_open(self, opened: bool) -> None:
+        direction = (
+            QVariantAnimation.Direction.Forward if opened else QVariantAnimation.Direction.Backward
+        )
+        self._tilt.setDirection(direction)
+        if self._tilt.state() != QVariantAnimation.State.Running:
+            self._tilt.start()
+
+    def paintEvent(self, event):  # noqa: N802
+        from steempeg.ui.pro_appearance import accent_qcolor, visible_accent
+
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHints(
+            QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform
+        )
+        center = QPointF(self.width() / 2, self.height() / 2)
+        painter.save()
+        painter.translate(center)
+        painter.rotate(float(self._tilt.currentValue()))
+        side = self._icon_px
+        self._bell_icon.paint(painter, QRect(-side // 2, -side // 2, side, side))
+        painter.restore()
+        if self._unread:
+            background = QColor(self.parentWidget()._bar_bg)
+            dot = visible_accent(accent_qcolor(QColor("#b29ae7")), background, minimum=3.0)
+            painter.setBrush(dot)
+            painter.setPen(QPen(background, 1.25))
+            painter.drawEllipse(QPointF(self.width() - 4.5, 4.5), 3.5, 3.5)
+        painter.end()
+
+
 class SteempegTitleBar(QWidget):
     """Top chrome: branding left, window controls right (Windows order)."""
 
@@ -779,12 +842,10 @@ class SteempegTitleBar(QWidget):
         self.btn_title_kofi.clicked.connect(self.kofi_requested.emit)
         title_actions.addWidget(self.btn_title_kofi, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.btn_release_notices = _shell_icon_btn(
-            "TitleBarReleaseNotices",
+        self.btn_release_notices = _ReleaseNoticeBell(
             stroke_svg_icon("settings_tab_notifications.svg", "#cccccc", _icon_px),
-            "Announcements",
+            _icon_px, _hit_px,
         )
-        self.btn_release_notices.setAccessibleName("Announcements")
         title_actions.addWidget(self.btn_release_notices, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self._dev_icon_idle, self._dev_icon_hot = title_bar_dev_icons(_icon_px)
@@ -1070,6 +1131,7 @@ class SteempegTitleBar(QWidget):
             QPushButton#TitleBarSettings,
             QPushButton#TitleBarDev,
             QPushButton#TitleBarKofi,
+            QPushButton#TitleBarReleaseNotices,
             QPushButton#TitleBarCheckUpdates {{
                 background: transparent;
                 border: none;
@@ -1080,14 +1142,16 @@ class SteempegTitleBar(QWidget):
             QPushButton#TitleBarAboutInfo:hover,
             QPushButton#TitleBarSettings:hover,
             QPushButton#TitleBarDev:hover,
-            QPushButton#TitleBarKofi:hover {{
+            QPushButton#TitleBarKofi:hover,
+            QPushButton#TitleBarReleaseNotices:hover {{
                 background-color: rgba(255, 255, 255, 0.08);
                 border-radius: {getattr(self, "_shell_hit_radius", 11)}px;
             }}
             QPushButton#TitleBarAboutInfo:pressed,
             QPushButton#TitleBarSettings:pressed,
             QPushButton#TitleBarDev:pressed,
-            QPushButton#TitleBarKofi:pressed {{
+            QPushButton#TitleBarKofi:pressed,
+            QPushButton#TitleBarReleaseNotices:pressed {{
                 background-color: rgba(255, 255, 255, 0.12);
                 border-radius: {getattr(self, "_shell_hit_radius", 11)}px;
             }}

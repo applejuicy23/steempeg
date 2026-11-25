@@ -23,6 +23,7 @@ class ReleaseNotice:
     message: str
     critical: bool
     offer_update: bool
+    details: str = ""
 
 
 def notices_for_version(payload: object, version: str) -> list[ReleaseNotice]:
@@ -44,9 +45,13 @@ def notices_for_version(payload: object, version: str) -> list[ReleaseNotice]:
             continue
         if len(notice_id) > 64 or len(title) > 120 or len(message) > 1400:
             continue
+        details = row.get("details")
+        if not isinstance(details, str) or len(details) > 2400:
+            details = ""
         notices.setdefault(
             notice_id,
             ReleaseNotice(notice_id, title.strip(), message.strip(),
-                          row.get("critical") is True, row.get("action") == "update"),
+                          row.get("critical") is True, row.get("action") == "update",
+                          details.strip()),
         )
     return sorted(notices.values(), key=lambda item: not item.critical)[:16]

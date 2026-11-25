@@ -5,7 +5,7 @@ import subprocess
 import sys
 import webbrowser
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtWidgets import QApplication
 
 from steempeg.infra.paths import get_install_root, get_save_directory, open_path_with_default_app
@@ -61,9 +61,11 @@ class UpdaterMixin:
         button = getattr(getattr(self.ui, "title_bar", None), "btn_release_notices", None)
         if button is not None:
             button.setVisible(not hidden)
+        popup = getattr(self, "_release_notices_popup", None)
+        if hidden and popup is not None:
+            popup.close()
 
     def start_release_notices(self) -> None:
-        from PySide6.QtCore import QTimer
         from steempeg.services.release_notices import NOTICES_URL
         from steempeg.ui.release_communication import request_release_json
 
@@ -82,39 +84,58 @@ class UpdaterMixin:
 
         self._release_notices = notices_for_version(payload, APP_VERSION_STR)
         self._refresh_release_notice_bell()
+        popup = getattr(self, "_release_notices_popup", None)
+        if popup is not None:
+            popup.set_notices(self._release_notices, self._unread_release_notice_ids())
+
+    def _read_release_notice_ids(self) -> list[str]:
+        saved = self.load_user_settings().get("read_release_notices", [])
+        return [item for item in saved if isinstance(item, str)] if isinstance(saved, list) else []
+
+    def _unread_release_notice_ids(self) -> set[str]:
+        return {notice.id for notice in self._release_notices}.difference(self._read_release_notice_ids())
 
     def _refresh_release_notice_bell(self) -> None:
-        from steempeg.ui.settings_layouts import stroke_svg_icon
-
-        saved = self.load_user_settings().get("read_release_notices", [])
-        read = {item for item in saved if isinstance(item, str)} if isinstance(saved, list) else set()
-        unread = [notice for notice in self._release_notices if notice.id not in read]
-        urgent = any(notice.critical for notice in unread)
-        color = "#ff6c6c" if urgent else "#b29ae7" if unread else "#cccccc"
         button = self.ui.title_bar.btn_release_notices
-        button.setIcon(stroke_svg_icon("settings_tab_notifications.svg", color, 16))
-        label = "Announcements" if not unread else f"Announcements · {len(unread)} unread"
-        if urgent:
-            label += " · Important notice"
-        button.setToolTip(label)
-        button.setAccessibleName(label)
+        unread = self._unread_release_notice_ids()
+        button.set_unread(
+            len(unread),
+            important=any(notice.critical and notice.id in unread for notice in self._release_notices),
+        )
 
     def _open_release_notices(self) -> None:
-        from steempeg.ui.release_communication import ReleaseNoticesDialog
+        from steempeg.ui.release_communication import ReleaseNoticesPopup
 
-        notices = self._release_notices
-        dialog = ReleaseNoticesDialog(notices, self.ui)
-        dialog.exec()
-        if notices:
-            saved = self.load_user_settings().get("read_release_notices", [])
-            read = [item for item in saved if isinstance(item, str)] if isinstance(saved, list) else []
-            ids = list(dict.fromkeys([notice.id for notice in notices] + read))[:64]
-            self.save_user_settings("read_release_notices", ids)
-            self._refresh_release_notice_bell()
-        open_updates = dialog.open_update_center
-        dialog.deleteLater()
-        if open_updates:
-            self.check_for_updates()
+        popup = getattr(self, "_release_notices_popup", None)
+        if popup is not None:
+            popup.close()
+            return
+
+        button = self.ui.title_bar.btn_release_notices
+        popup = ReleaseNoticesPopup(button)
+        popup.set_notices(self._release_notices, self._unread_release_notice_ids())
+        self._release_notices_popup = popup
+        button.set_panel_open(True)
+        popup.closed.connect(self._on_release_notices_closed)
+        popup.update_requested.connect(
+            lambda: QTimer.singleShot(0, self.ui, self.check_for_updates)
+        )
+        popup.show()
+
+    def _on_release_notices_closed(self) -> None:
+        popup = self._release_notices_popup
+        self._release_notices_popup = None
+        self.ui.title_bar.btn_release_notices.set_panel_open(False)
+        read = self._read_release_notice_ids()
+        already_read = set(read)
+        new = [
+            notice.id for notice in self._release_notices
+            if notice.id in popup.displayed_ids and notice.id not in already_read
+        ]
+        if new:
+            self.save_user_settings("read_release_notices", (new + read)[:64])
+        self._refresh_release_notice_bell()
+        popup.deleteLater()
 
     def show_first_launch_release_notes(self, updated_from=None, backup_folder=None) -> None:
         """Show highlights once after an upgrade, including the updater's first launch."""
@@ -466,7 +487,7 @@ class UpdaterMixin:
         url = f"https://github.com/{REPO}/releases/tag/v{APP_VERSION_STR}"
         dialog = WhatsNewDialog(APP_VERSION_STR, old_version, url, self.ui)
         if entry is not None and entry.body.strip():
-            dialog.set_notes(entry.body)
+            dialog.set_notes(entry.body, published_at=entry.published_at)
         else:
             def find_notes(payload):
                 rows = payload.get("releases") if isinstance(payload, dict) else payload
@@ -476,7 +497,11 @@ class UpdaterMixin:
                     if not isinstance(row, dict) or row.get("draft"):
                         continue
                     if release_key(row.get("tag_name")) == version and isinstance(row.get("body"), str):
-                        dialog.set_notes(row["body"])
+                        published_at = row.get("published_at")
+                        dialog.set_notes(
+                            row["body"],
+                            published_at=published_at if isinstance(published_at, str) else "",
+                        )
                         break
 
             request_release_json(dialog, CHANGELOG_RELEASES_URL, find_notes, limit=4 * 1024 * 1024)
