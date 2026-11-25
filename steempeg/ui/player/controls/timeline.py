@@ -2590,13 +2590,14 @@ class TimelineCanvas(QWidget):
         self.update()
         self._refresh_overview_playhead_marker()
         
-    def force_jump(self, new_position_ms):
+    def force_jump(self, new_position_ms, *, seek=True):
         if self.duration_ms <= 0: return
         self.visual_ms = max(0.0, min(float(new_position_ms), float(self.duration_ms)))
         self.target_ms = self.visual_ms
         self.vlc_last_update_time = time.time()
         self.user_seek_lock_time = time.time() + 0.15 
-        self.seek_requested.emit(int(self.visual_ms))
+        if seek:
+            self.seek_requested.emit(int(self.visual_ms))
         self.update()
         self._refresh_overview_playhead_marker()
     def leaveEvent(self, event):
@@ -3122,7 +3123,7 @@ class CustomTimelineWidget(QScrollArea):
                 self.canvas.preview_widget.clear_for_new_media()
         self.canvas.current_video_path = val
 
-    def force_jump(self, ms): self.canvas.force_jump(ms)
+    def force_jump(self, ms, *, seek=True): self.canvas.force_jump(ms, seek=seek)
     def set_duration(self, ms): self.canvas.set_duration(ms)
     def set_vlc_time(self, ms, is_p): self.canvas.set_vlc_time(ms, is_p)
     def enable_trim_mode(self): self.canvas.enable_trim_mode()
