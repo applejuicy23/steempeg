@@ -1078,6 +1078,11 @@ class DevModeDialog(SteempegDialog):
         btn_ffmpeg_err.clicked.connect(self._simulate_ffmpeg_error_dialog)
         lay.addWidget(btn_ffmpeg_err)
 
+        btn_whats_new = QPushButton("Preview What's New / Found a bug?")
+        btn_whats_new.setToolTip("Open the post-update window with sample release notes.")
+        btn_whats_new.clicked.connect(self._open_whats_new_preview)
+        lay.addWidget(btn_whats_new)
+
         # -- Dead Clip salvage flow (dialog walkthrough, no clip I/O) --
         g_salvage = QGroupBox("Dead Clip salvage flow (demo)")
         g_salvage_lay = QVBoxLayout(g_salvage)
@@ -1695,6 +1700,24 @@ class DevModeDialog(SteempegDialog):
         for clip in clips:
             host.show_new_clip_popup(clip)
         self._tools_log.appendPlainText(f"New clip popup preview: {len(clips)} card(s).")
+
+    def _open_whats_new_preview(self) -> None:
+        from steempeg.services.release_catalog import REPO
+        from steempeg.ui.release_communication import WhatsNewDialog
+
+        dialog = WhatsNewDialog("60", "59.4", f"https://github.com/{REPO}/releases", self)
+        dialog.set_notes(
+            "## 🚀 NEW FEATURES\n\n"
+            "- **Announcements** for your installed version are available from the title bar.\n"
+            "- Customize your interface accent with **Steempeg PRO**.\n\n"
+            "## ⚡ IMPROVEMENTS:\n\n"
+            "Choose export presets and a target file size directly in **Express Player**.\n\n"
+            "## ✨ BUGFIXES:\n\n"
+            "The Express timeline resets when a clip is replayed.",
+            published_at="2026-05-24",
+        )
+        dialog.exec()
+        dialog.deleteLater()
 
     def _open_express_player_preview(self) -> None:
         """Opens the Express mini player on the clip currently open in the player."""
