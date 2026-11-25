@@ -713,6 +713,11 @@ def pause_render_icon(size: int = 16) -> QIcon:
     return _dash_button_glyph_icon("pauserender.png", size)
 
 
+def resume_render_icon(size: int = 16) -> QIcon:
+    """Desktop Resume dash button glyph."""
+    return _dash_button_glyph_icon("play2.png", size)
+
+
 def cancel_render_icon(size: int = 16) -> QIcon:
     """Desktop Cancel dash button glyph."""
     return _dash_button_glyph_icon("cancelrender.png", size)

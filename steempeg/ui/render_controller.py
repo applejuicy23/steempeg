@@ -3220,7 +3220,6 @@ class RenderMixin:
         from steempeg.ui.icon_assets import (
             cancel_render_icon,
             logs_info_icon,
-            pause_render_icon,
             start_render_icon,
         )
 
@@ -3230,11 +3229,8 @@ class RenderMixin:
             self.ui.btn_start.setIcon(start_render_icon(icon_sz))
             self.ui.btn_start.setIconSize(size)
         if hasattr(self.ui, "btn_pause"):
-            self.ui.btn_pause.setIcon(pause_render_icon(icon_sz))
             self.ui.btn_pause.setIconSize(size)
-            # Keep leading space so icon doesn't glue to the label.
-            text = (self.ui.btn_pause.text() or "Pause").strip()
-            self.ui.btn_pause.setText(f" {text}")
+            self._set_desktop_pause_label(self.ui.btn_pause.text())
         if hasattr(self.ui, "btn_cancel"):
             self.ui.btn_cancel.setIcon(cancel_render_icon(icon_sz))
             self.ui.btn_cancel.setIconSize(size)
@@ -3253,6 +3249,10 @@ class RenderMixin:
         if getattr(self, "_portable_shell", False):
             self.ui.btn_pause.setText(label)
         else:
+            from steempeg.ui.icon_assets import pause_render_icon, resume_render_icon
+
+            icon = resume_render_icon if label == "Resume" else pause_render_icon
+            self.ui.btn_pause.setIcon(icon(16))
             self.ui.btn_pause.setText(f" {label}")
 
     def _queue_pending_count(self) -> int:
