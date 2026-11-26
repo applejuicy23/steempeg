@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from pathlib import Path
 
 _log = logging.getLogger(__name__)
 
@@ -34,6 +35,9 @@ def restart_application(app_obj=None) -> None:
     if is_frozen_build():
         # Frozen: argv[0] is the exe; only pass trailing args.
         ok = QProcess.startDetached(exe, argv[1:])
+    elif Path(argv[0]).name == "__main__.py":
+        # Keep package imports working when the current process was started with -m.
+        ok = QProcess.startDetached(exe, ["-m", "steempeg", *argv[1:]])
     else:
         ok = QProcess.startDetached(exe, argv)
     if not ok:
