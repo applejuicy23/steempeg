@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 from copy import deepcopy
 
@@ -2359,8 +2360,12 @@ class SettingsDialog(SteempegDialog):
             refresh()
 
     def _pick_pro_accent(self) -> None:
+        options = QColorDialog.ColorDialogOption(0)
+        if sys.platform.startswith("linux"):
+            # The GTK color picker can abort inside GLib while drawing swatches.
+            options |= QColorDialog.ColorDialogOption.DontUseNativeDialog
         color = QColorDialog.getColor(
-            QColor(self._pro_accent_button.text()), self, "Choose PRO accent color"
+            QColor(self._pro_accent_button.text()), self, "Choose PRO accent color", options
         )
         if color.isValid():
             self._set_pro_accent(color.name())

@@ -5,7 +5,11 @@ from PySide6.QtCore import QRectF, Qt, QSize
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from steempeg.ui.pro_appearance import contrast_ink, pro_accents_enabled, pro_brand_color, visible_accent
+from steempeg.ui.pro_appearance import (
+    contrast_ink,
+    pro_brand_color,
+    visible_accent,
+)
 
 _DARK_CHROME = QColor("#222222")
 
@@ -69,6 +73,8 @@ class ProBadge(QWidget):
         if edge != fill:
             p.setPen(QPen(edge, 1))
             p.drawPath(path)
-        p.setPen(contrast_ink(fill) if pro_accents_enabled() else QColor(Qt.GlobalColor.white))
+        hue = fill.hsvHue()
+        is_red = fill.hsvSaturationF() >= 0.35 and (0 <= hue <= 15 or hue >= 345)
+        p.setPen(QColor(Qt.GlobalColor.white) if is_red else contrast_ink(fill))
         p.setFont(self._font)
         p.drawText(self.rect(), int(Qt.AlignmentFlag.AlignCenter), "PRO")
