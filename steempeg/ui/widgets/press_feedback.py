@@ -1,9 +1,7 @@
 """Short press-in feedback for buttons.
 
-Transport icons use ``mode="icon"`` (paint only).
-
-Render-dash / Trim chips use ``mode="chip"`` — same language as ClipCard:
-grab a snapshot, paint it scaled about center (``CARD_PRESS_*`` tokens).
+Transport buttons scale the icon. Render and player chips scale the live
+button paint around its center. Both leave the hitbox and layout unchanged.
 """
 from __future__ import annotations
 
@@ -15,10 +13,10 @@ from PySide6.QtCore import (
     Qt,
     QVariantAnimation,
 )
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPixmap
-from PySide6.QtWidgets import QAbstractButton, QWidget
+from PySide6.QtGui import QIcon, QPainter
+from PySide6.QtWidgets import QAbstractButton, QPushButton, QStyle, QStyleOptionButton, QWidget
 
-from steempeg.ui.design_tokens import CARD_PRESS_DURATION_MS, CARD_PRESS_SCALE
+from steempeg.ui.design_tokens import CARD_PRESS_SCALE
 
 
 def install_press_feedback(
@@ -27,27 +25,21 @@ def install_press_feedback(
     pressed_scale: float | None = None,
     duration_ms: int | None = None,
     mode: str = "icon",
-    chip_radius: float | None = None,
 ) -> PressFeedbackFilter:
     """Attach press feedback; safe to call once per button.
 
     ``mode``:
       * ``icon`` — scale the painted icon (player transport).
-      * ``chip`` — ClipCard-style whole-control snapshot scale.
-
-    ``chip_radius`` — optional paint/mask radius for ``mode="chip"`` (header chips
-    use 8 to match QSS; dash pills omit and keep half-height).
+      * ``chip`` — scale the whole button paint.
     """
     if mode == "chip":
         if pressed_scale is None:
             pressed_scale = float(CARD_PRESS_SCALE)
-        if duration_ms is None:
-            duration_ms = int(CARD_PRESS_DURATION_MS)
     else:
         if pressed_scale is None:
             pressed_scale = 0.91
-        if duration_ms is None:
-            duration_ms = 95
+    if duration_ms is None:
+        duration_ms = 95
 
     existing = getattr(button, "_press_feedback_filter", None)
     if isinstance(existing, PressFeedbackFilter):
@@ -55,8 +47,6 @@ def install_press_feedback(
             existing.mode = mode
         existing._pressed_scale = float(pressed_scale)
         existing._duration = max(40, int(duration_ms))
-        if chip_radius is not None:
-            existing._chip_radius_override = float(chip_radius)
         existing.sync_rest()
         return existing
     filt = PressFeedbackFilter(
@@ -64,7 +54,6 @@ def install_press_feedback(
         pressed_scale=float(pressed_scale),
         duration_ms=int(duration_ms),
         mode=mode,
-        chip_radius=chip_radius,
     )
     button._press_feedback_filter = filt  # type: ignore[attr-defined]
     return filt
@@ -75,10 +64,9 @@ def install_press_feedback_chip(
     *,
     pressed_scale: float | None = None,
     duration_ms: int | None = None,
-    chip_radius: float | None = None,
 ) -> PressFeedbackFilter | None:
-    """ClipCard-style whole-chip press. No-op on ``None``."""
-    if button is None:
+    """Scale the whole button in place. No-op for missing or unsupported controls."""
+    if not isinstance(button, QPushButton):
         return None
     try:
         button.objectName()
@@ -89,7 +77,6 @@ def install_press_feedback_chip(
         pressed_scale=pressed_scale,
         duration_ms=duration_ms,
         mode="chip",
-        chip_radius=chip_radius,
     )
 
 
@@ -129,24 +116,17 @@ class PressFeedbackFilter(QObject):
         pressed_scale: float = 0.88,
         duration_ms: int = 80,
         mode: str = "icon",
-        chip_radius: float | None = None,
     ):
         super().__init__(button)
         self._btn = button
         self._pressed_scale = float(pressed_scale)
         self._duration = max(40, int(duration_ms))
         self.mode = "chip" if mode == "chip" else "icon"
-        self._chip_radius_override = (
-            float(chip_radius) if chip_radius is not None else None
-        )
         self._scale = 1.0
         self._anim = QVariantAnimation(self)
         self._anim.valueChanged.connect(lambda value: self._apply_scale(float(value)))
-        self._anim.finished.connect(self._on_anim_finished)
         self._icon_pixmaps = {}
-        self._snapshot: QPixmap | None = None
         self._pressed = False
-        self._backdrop = QColor("#141414")
         button.installEventFilter(self)
         button.pressed.connect(self._on_pressed)
         button.released.connect(self._on_released)
@@ -157,78 +137,8 @@ class PressFeedbackFilter(QObject):
         self.sync_rest()
 
     def sync_rest(self) -> None:
-        """Call after density / icon / label changes so the next press grabs fresh."""
-        if self._pressed or self._scale < 0.99:
-            return
-        self._end_chip_paint_mode()
-        self._scale = 1.0
-        self._refresh_backdrop()
-
-    def _refresh_backdrop(self) -> None:
-        """Color behind the chip — fills corners when the grab is scaled down."""
-        try:
-            from steempeg.ui import design_tokens as tok
-
-            self._backdrop = QColor(getattr(tok, "BG_SHELL", None) or "#1e1e1e")
-        except Exception:
-            self._backdrop = QColor("#1e1e1e")
-        parent = self._btn.parentWidget()
-        if parent is None:
-            return
-        try:
-            # Sample the parent fill so dash / footer match (TrueDark / chrome theme).
-            pal = parent.palette().color(parent.backgroundRole())
-            if pal.isValid() and pal.alpha() > 0:
-                # Prefer explicit shell token when parent palette is still default gray.
-                name = pal.name().lower()
-                if name not in ("#000000", "#ffffff", "#f0f0f0"):
-                    self._backdrop = QColor(pal)
-        except Exception:
-            pass
-
-    def _chip_radius(self, w: int, h: int) -> float:
-        if self._chip_radius_override is not None:
-            return max(2.0, float(self._chip_radius_override))
-        # Dash / Trim chips are pills: radius ≈ half height (same as _fmt_dash_btn).
-        return float(max(8, h // 2))
-
-    def _begin_chip_paint_mode(self) -> None:
-        """ClipCard: grab the live control, then paint that pixmap scaled."""
-        if self._snapshot is not None and not self._snapshot.isNull():
-            return
-        self._refresh_backdrop()
-        try:
-            snap = self._btn.grab()
-        except Exception:
-            snap = QPixmap()
-        if snap.isNull():
-            return
-        # QSS pills still grab as an opaque rectangle — mask to a real round chip
-        # so scaled paint never shows square corners.
-        w = max(1, snap.width())
-        h = max(1, snap.height())
-        radius = self._chip_radius(w, h)
-        masked = QPixmap(w, h)
-        masked.fill(Qt.GlobalColor.transparent)
-        mp = QPainter(masked)
-        mp.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        mp.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        path = QPainterPath()
-        path.addRoundedRect(0.5, 0.5, w - 1.0, h - 1.0, radius, radius)
-        mp.setClipPath(path)
-        mp.drawPixmap(0, 0, snap)
-        mp.end()
-        self._snapshot = masked
+        """Refresh the resting paint after density, icon or label changes."""
         self._btn.update()
-
-    def _end_chip_paint_mode(self) -> None:
-        if self._snapshot is None:
-            return
-        self._snapshot = None
-        try:
-            self._btn.update()
-        except RuntimeError:
-            pass
 
     def _apply_scale(self, scale: float) -> None:
         self._scale = scale
@@ -240,37 +150,16 @@ class PressFeedbackFilter(QObject):
         target = float(target)
         if abs(start - target) < 0.01:
             self._apply_scale(target)
-            if self.mode == "chip" and abs(target - 1.0) < 0.01 and not self._pressed:
-                self._end_chip_paint_mode()
             return
         anim = self._anim
         anim.setStartValue(start)
         anim.setEndValue(target)
-        anim.setDuration(self._duration + (25 if self.mode == "icon" and target >= start else 0))
-        anim.setEasingCurve(
-            QEasingCurve.Type.OutCubic
-            if self.mode == "icon" or target >= start
-            else QEasingCurve.Type.InCubic
-        )
+        anim.setDuration(self._duration + (25 if target >= start else 0))
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         anim.start()
-
-    def _on_anim_finished(self) -> None:
-        if (
-            self.mode == "chip"
-            and abs(self._scale - 1.0) < 0.01
-            and not self._pressed
-        ):
-            self._end_chip_paint_mode()
 
     def _on_pressed(self) -> None:
         self._pressed = True
-        if self.mode == "chip":
-            # Snapshot preferably taken on MouseButtonPress (pre-:pressed). Fallback:
-            if self._snapshot is None or self._snapshot.isNull():
-                self._begin_chip_paint_mode()
-        else:
-            if abs(self._scale - 1.0) < 0.01:
-                self.sync_rest()
         self._animate_to(self._pressed_scale)
 
     def _on_released(self) -> None:
@@ -300,63 +189,36 @@ class PressFeedbackFilter(QObject):
             painter.drawPixmap(QPointF(-logical.width() / 2, -logical.height() / 2), pixmap)
         return True
 
+    def _paint_chip(self) -> bool:
+        if not isinstance(self._btn, QPushButton) or self._scale == 1.0:
+            return False
+
+        option = QStyleOptionButton()
+        self._btn.initStyleOption(option)
+        center = QPointF(self._btn.width() / 2.0, self._btn.height() / 2.0)
+        with QPainter(self._btn) as painter:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.translate(center)
+            painter.scale(self._scale, self._scale)
+            painter.translate(-center)
+            draw_button = getattr(self._btn, "draw_press_feedback_chip", None)
+            if draw_button is None:
+                self._btn.style().drawControl(QStyle.ControlElement.CE_PushButton, option, painter, self._btn)
+            else:
+                draw_button(painter, option)
+        return True
+
     def eventFilter(self, obj, event):  # noqa: N802
         if obj is not self._btn:
             return False
         et = event.type()
-        if self.mode == "icon" and et == QEvent.Type.Paint:
-            return self._paint_icon()
-        if self.mode == "chip" and et == QEvent.Type.MouseButtonPress:
-            if event.button() == Qt.MouseButton.LeftButton:
-                # Grab before Qt flips :pressed (avoids rectangular pressed fill in snap).
-                if abs(self._scale - 1.0) < 0.01:
-                    self._end_chip_paint_mode()
-                self._begin_chip_paint_mode()
-            return False
-        if et == QEvent.Type.Leave:
-            if self._pressed or self._scale < 0.99:
-                self._pressed = False
-                self._animate_to(1.0)
-            return False
-        if (
-            self.mode == "chip"
-            and et == QEvent.Type.Paint
-            and self._snapshot is not None
-            and not self._snapshot.isNull()
-        ):
-            # ClipCard language: rounded clip + backdrop + grab scaled about center.
-            # Clip first so a scaled-down snap never leaves square widget corners.
-            p = QPainter(self._btn)
-            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-            w = max(1, int(self._btn.width()))
-            h = max(1, int(self._btn.height()))
-            radius = self._chip_radius(w, h)
-            path = QPainterPath()
-            path.addRoundedRect(0.5, 0.5, w - 1.0, h - 1.0, radius, radius)
-            p.setClipPath(path)
-            p.fillRect(0, 0, w, h, self._backdrop)
-            scale = float(self._scale)
-            if abs(scale - 1.0) > 0.001:
-                cx = w / 2.0
-                cy = h / 2.0
-                p.translate(cx, cy)
-                p.scale(scale, scale)
-                p.translate(-cx, -cy)
-            snap = self._snapshot
-            if snap.width() != w or snap.height() != h:
-                p.drawPixmap(
-                    0,
-                    0,
-                    snap.scaled(
-                        w,
-                        h,
-                        Qt.AspectRatioMode.IgnoreAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    ),
-                )
-            else:
-                p.drawPixmap(0, 0, snap)
-            p.end()
-            return True
+        if et == QEvent.Type.Paint:
+            return self._paint_icon() if self.mode == "icon" else self._paint_chip()
+        if et == QEvent.Type.Leave and (self._pressed or self._scale < 0.99):
+            self._on_released()
+        elif et == QEvent.Type.Hide or (et == QEvent.Type.EnabledChange and not self._btn.isEnabled()):
+            self._anim.stop()
+            self._pressed = False
+            self._apply_scale(1.0)
         return False

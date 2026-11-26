@@ -30,13 +30,20 @@ class _ZoomPercentButton(QPushButton):
             super().paintEvent(event)
             return
 
-        # Linux / Steam Deck: correct the baseline without shifting the label
-        # horizontally away from its ordinary Qt button placement.
         option = QStyleOptionButton()
         self.initStyleOption(option)
+        with QPainter(self) as painter:
+            self.draw_press_feedback_chip(painter, option)
+
+    def draw_press_feedback_chip(self, painter, option) -> None:
+        if not sys.platform.startswith("linux"):
+            self.style().drawControl(QStyle.ControlElement.CE_PushButton, option, painter, self)
+            return
+
+        # Linux / Steam Deck: correct the baseline without shifting the label
+        # horizontally away from its ordinary Qt button placement.
         text = option.text
         option.text = ""
-        painter = QPainter(self)
         self.style().drawControl(QStyle.ControlElement.CE_PushButton, option, painter, self)
         rect = self.style().subElementRect(QStyle.SubElement.SE_PushButtonContents, option, self)
         metrics = self.fontMetrics()
@@ -176,8 +183,8 @@ def install_player_zoom_chrome(app) -> QWidget | None:
         from steempeg.ui.widgets.press_feedback import install_press_feedback_chip
 
         # Match QSS border-radius: 8 — half-height pill mask looked square on these chips.
-        install_press_feedback_chip(btn_loupe, chip_radius=8.0)
-        install_press_feedback_chip(btn_pct, chip_radius=8.0)
+        install_press_feedback_chip(btn_loupe)
+        install_press_feedback_chip(btn_pct)
     except Exception:
         pass
 
@@ -343,8 +350,8 @@ def sync_preview_zoom_chrome(
     try:
         from steempeg.ui.widgets.press_feedback import install_press_feedback_chip
 
-        install_press_feedback_chip(btn_loupe, chip_radius=8.0)
-        install_press_feedback_chip(btn_pct, chip_radius=8.0)
+        install_press_feedback_chip(btn_loupe)
+        install_press_feedback_chip(btn_pct)
     except Exception:
         pass
 
