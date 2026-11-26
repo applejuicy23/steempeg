@@ -104,24 +104,24 @@
 
 ## 📸 Screenshots
 
-<p align="center"><em>Clips manager with filters, cards & render queue</em></p>
+<p align="center"><em>Clips Manager with clip cards, timeline markers, and trim controls</em></p>
 <p align="center">
-  <img src="docs/readme/steempeg50_1.png" alt="Steempeg — filters, cards and render queue" width="92%">
+  <img src="docs/readme/steempeg60_1.png" alt="Steempeg — clip library and a Counter-Strike 2 clip with timeline markers" width="92%">
 </p>
 
-<p align="center"><em>Markers, queue & batch export</em></p>
+<p align="center"><em>Timeline markers and render progress</em></p>
 <p align="center">
-  <img src="docs/readme/steempeg50_2.png" alt="Steempeg — markers and queue" width="92%">
+  <img src="docs/readme/steempeg60_2.png" alt="Steempeg — a Wuthering Waves clip with markers and an export in progress" width="92%">
 </p>
 
-<p align="center"><em>Clip cards & source info</em></p>
+<p align="center"><em>Theatre mode with timeline and playback controls</em></p>
 <p align="center">
-  <img src="docs/readme/steempeg50_3.png" alt="Steempeg — clip cards library" width="92%">
+  <img src="docs/readme/steempeg60_3.png" alt="Steempeg — a clip in Theatre mode with a timeline marker and its tooltip" width="92%">
 </p>
 
-<p align="center"><em>Theatre / Portable — immersive playback</em></p>
+<p align="center"><em>Immersive fullscreen playback</em></p>
 <p align="center">
-  <img src="docs/readme/steempeg50_4.png" alt="Steempeg — theatre mode" width="92%">
+  <img src="docs/readme/steempeg60_4.png" alt="Steempeg — fullscreen clip playback with floating controls" width="92%">
 </p>
 
 ---

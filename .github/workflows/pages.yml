@@ -50,9 +50,7 @@ jobs:
           cp website/landing/index.html website/landing/styles.css website/landing/changelog.html website/landing/changelog.css website/landing/donate.html website/landing/steempeg-meta.json website/landing/notices.json public/
           cp assets/logo.png public/assets/logo.png
           # Product screenshots (README gallery)
-          cp docs/readme/steempeg50_1.png public/media/
-          cp docs/readme/steempeg50_2.png public/media/
-          cp docs/readme/steempeg50_4.png public/media/
+          cp docs/readme/steempeg60_{1,2,3,4}.png public/media/
           # MkDocs → /docs/
           mkdocs build -f website/mkdocs.yml -d "$PWD/public/docs" --clean
 
