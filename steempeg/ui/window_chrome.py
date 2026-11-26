@@ -2038,21 +2038,22 @@ class _LinuxEdgeResizeFilter(QObject):
         self._window = window
         self._snap_to_top = snap_to_top
         self._title_drag_offset: QPoint | None = None
-        app = QApplication.instance()
-        if app is not None:
-            app.installEventFilter(self)
 
     def begin_title_drag(self, global_pos: QPoint) -> None:
         if sys.platform != "win32" and self._snap_to_top:
             _linux_unsnap_from_fake_maximize(self._window, global_pos)
         self._title_drag_offset = global_pos - self._window.pos()
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
         try:
             self._window.grabMouse()
         except Exception:
             pass
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
-        if self._title_drag_offset is None:
+        # Qt can deliver events while a prewarmed dialog is being destroyed.
+        if getattr(self, "_title_drag_offset", None) is None:
             return False
 
         et = event.type()
@@ -2090,6 +2091,9 @@ class _LinuxEdgeResizeFilter(QObject):
 
     def _end_title_drag(self, *, snap: bool = True) -> None:
         self._title_drag_offset = None
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
         try:
             if QWidget.mouseGrabber() is self._window:
                 self._window.releaseMouse()
