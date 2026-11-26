@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtCore import Qt, QSize, Signal, Slot
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -166,7 +167,10 @@ class MarkerSettingsDialog(SteempegDialog):
         self._app = app
         self._app_id = str(app_id or "") or None
         self._clip_markers = list(clip_markers or [])
-        self._is_cs2_clip = str(self._app_id or "") == mprefs.CS2_APP_ID
+        canvas = self._canvas()
+        self._media_path = getattr(canvas, "rendered_media_path", None) or getattr(
+            canvas, "current_clip_path", None
+        )
         self.setMinimumSize(960, 680)
         self.resize(1080, 780)
 
@@ -215,8 +219,8 @@ class MarkerSettingsDialog(SteempegDialog):
         self._tabs = QTabWidget()
         self._tabs.setStyleSheet(_marker_tabs_stylesheet())
         self._tabs.addTab(self._build_markers_tab(), "On clip")
-        if self._is_cs2_clip:
-            self._tabs.addTab(self._build_cs2_tab(), "CS2")
+        self._cs2_tab_index = self._tabs.addTab(self._build_cs2_tab(), "CS2")
+        self._tabs.setTabVisible(self._cs2_tab_index, self._app_id == mprefs.CS2_APP_ID)
         self._tabs.addTab(self._build_classes_tab(), "Classes")
         root.addWidget(self._tabs, 1)
 
@@ -243,6 +247,8 @@ class MarkerSettingsDialog(SteempegDialog):
         self._repopulate_markers()
         self._reload_class_combo()
         self._apply_marker_form_chrome()
+        if canvas is not None:
+            canvas.marker_chrome_changed.connect(self._sync_clip_markers_from_canvas)
 
     def apply_ui_theme_chrome(self) -> None:
         """Live-retint when Settings switches UI theme while Marker Settings is open."""
@@ -440,18 +446,6 @@ class MarkerSettingsDialog(SteempegDialog):
         lay.setContentsMargins(12, 12, 12, 12)
         lay.setSpacing(10)
 
-        if not self._clip_rows:
-            empty = QLabel("List is empty")
-            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty.setStyleSheet(
-                f"color: {tok.TEXT_MUTED}; font-size: 13px; background: transparent; "
-                f"font-family: {tok.FONT_APP};"
-            )
-            lay.addStretch(1)
-            lay.addWidget(empty)
-            lay.addStretch(2)
-            return _scroll_page(page)
-
         row = QHBoxLayout()
         row.setSpacing(12)
 
@@ -612,7 +606,17 @@ class MarkerSettingsDialog(SteempegDialog):
         row.addLayout(right, 3)
         lay.addLayout(row, 1)
         self._clear_marker_editor()
-        return _scroll_page(page)
+
+        empty = QLabel("List is empty")
+        empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty.setStyleSheet(
+            f"color: {tok.TEXT_MUTED}; font-size: 13px; background: transparent; "
+            f"font-family: {tok.FONT_APP};"
+        )
+        self._marker_pages = QStackedWidget()
+        self._marker_pages.addWidget(empty)
+        self._marker_pages.addWidget(_scroll_page(page))
+        return self._marker_pages
 
     @staticmethod
     def _section(text: str) -> QLabel:
@@ -980,14 +984,23 @@ class MarkerSettingsDialog(SteempegDialog):
         w = mprefs.time_column_width_for_duration_ms(self._clip_duration_ms())
         self._marker_table.setColumnWidth(_COL_TIME, w)
 
+    @Slot()
     def _sync_clip_markers_from_canvas(self) -> None:
         canvas = self._canvas()
         if canvas is None:
             return
+        media_path = canvas.rendered_media_path or canvas.current_clip_path
+        if media_path != self._media_path:
+            self._media_path = media_path
+            self._clear_marker_editor()
         self._clip_markers = list(getattr(canvas, "markers", []) or [])
         self._clip_rows = mprefs.clip_marker_setting_rows(self._clip_markers)
         self._prefs = mprefs.load_marker_prefs()
-        self._apply_time_column_width()
+        app_id = canvas.current_app_id
+        if app_id != self._app_id:
+            self._app_id = app_id
+            self._tabs.setTabVisible(self._cs2_tab_index, app_id == mprefs.CS2_APP_ID)
+            self._reload_classes()
         self._repopulate_markers()
 
     def _canvas_marker_for_row(self, row_info: dict | None) -> dict | None:
@@ -1152,8 +1165,6 @@ class MarkerSettingsDialog(SteempegDialog):
         return pix
 
     def _repopulate_markers(self) -> None:
-        if not hasattr(self, "_marker_table"):
-            return
         prev = self._selected_row_id
         self._suppress_marker_seek = True
         self._marker_table.blockSignals(True)
@@ -1216,6 +1227,7 @@ class MarkerSettingsDialog(SteempegDialog):
                 r, _COL_NAME, self._make_name_marquee(name)
             )
 
+        self._marker_pages.setCurrentIndex(1 if self._clip_rows else 0)
         self._marker_table.setSortingEnabled(True)
         self._marker_table.sortItems(_COL_TIME, Qt.SortOrder.AscendingOrder)
         self._marker_table.blockSignals(False)
@@ -1703,19 +1715,13 @@ def show_marker_settings_dialog(app, *, select_marker=None) -> None:
     if existing is not None:
         try:
             if existing.isVisible():
-                # Empty-on-open shell has no table — rebuild if we need a row.
-                if select_marker is not None and not hasattr(
-                    existing, "_marker_table"
-                ):
-                    existing.close()
+                if select_marker is not None:
+                    existing.select_canvas_marker(select_marker)
                 else:
-                    if select_marker is not None:
-                        existing.select_canvas_marker(select_marker)
-                    elif hasattr(existing, "_sync_clip_markers_from_canvas"):
-                        existing._sync_clip_markers_from_canvas()
-                    existing.raise_()
-                    existing.activateWindow()
-                    return
+                    existing._sync_clip_markers_from_canvas()
+                existing.raise_()
+                existing.activateWindow()
+                return
         except RuntimeError:
             pass
         app._marker_settings_dlg = None

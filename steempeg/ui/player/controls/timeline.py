@@ -2522,7 +2522,6 @@ class TimelineCanvas(QWidget):
             self.notify_markers_changed(animate=False)
         else:
             self.update()
-        self._sync_open_marker_settings()
 
     def _persist_user_marker_position(self, marker: dict) -> None:
         """Write moved custom pin time into sidecar / steempeg timeline / cache."""
