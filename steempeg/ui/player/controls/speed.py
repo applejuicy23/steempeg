@@ -6,7 +6,7 @@ open to reveal a slider; the owning player connects to ``self.slider`` for speed
 """
 import os
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt
 from PySide6.QtGui import QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
@@ -124,6 +124,7 @@ class SpeedControlWidget(QWidget):
         self.anim_max = QPropertyAnimation(self, b"maximumWidth")
         self.anim_max.setDuration(200)
         self.anim_max.setEasingCurve(QEasingCurve.OutCubic)
+        self.anim_max.finished.connect(self.hide_items)
 
         self.slider.valueChanged.connect(self.update_text)
         self.slider.sliderReleased.connect(self.on_slider_released)
@@ -240,7 +241,6 @@ class SpeedControlWidget(QWidget):
         self.anim_max.setEndValue(collapsed)
         self.anim.start()
         self.anim_max.start()
-        QTimer.singleShot(200, self.hide_items)
         super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -259,12 +259,15 @@ class SpeedControlWidget(QWidget):
             self.anim_max.setEndValue(collapsed)
             self.anim.start()
             self.anim_max.start()
-            QTimer.singleShot(200, self.hide_items)
 
     def hide_items(self):
-        if self.width() <= getattr(self, "_collapsed_w", 44) + 4:
+        if self.anim_max.endValue() == getattr(self, "_collapsed_w", 44):
             self.slider.hide()
             self.lbl_percent.hide()
+            # Repaint the area exposed by the transparent control as it shrinks.
+            parent = self.parentWidget()
+            if parent is not None:
+                parent.update()
 
     def _layout_strip(self, btn_size: int) -> None:
         """Place strip + label so the groove hugs the speed circle like old builds."""

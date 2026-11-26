@@ -6,7 +6,7 @@ volume is remembered across mutes. The owning player connects to ``self.slider``
 """
 import os
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
@@ -118,6 +118,7 @@ class VolumeControlWidget(QWidget):
         self.anim_max = QPropertyAnimation(self, b"maximumWidth")
         self.anim_max.setDuration(200)
         self.anim_max.setEasingCurve(QEasingCurve.OutCubic)
+        self.anim_max.finished.connect(self.hide_items)
 
         self.slider.valueChanged.connect(self.update_text)
 
@@ -218,9 +219,6 @@ class VolumeControlWidget(QWidget):
         self.anim.stop()
         self.anim_max.stop()
         
-        # MAGIC RESTORED: We removed the instant .hide() calls here!
-        # Now it will smoothly animate its width down to 44px first.
-        
         self.anim.setStartValue(self.width())
         collapsed = getattr(self, "_collapsed_w", 44)
         self.anim.setEndValue(collapsed)
@@ -229,9 +227,6 @@ class VolumeControlWidget(QWidget):
         
         self.anim.start()
         self.anim_max.start()
-        
-        # Hide the slider and text safely AFTER the 200ms animation finishes
-        QTimer.singleShot(200, self.hide_items)
         
         super().leaveEvent(event)
 
@@ -258,12 +253,14 @@ class VolumeControlWidget(QWidget):
             self.anim.start()
             self.anim_max.start()
 
-            QTimer.singleShot(200, self.hide_items)
-
     def hide_items(self):
-        if self.width() <= getattr(self, "_collapsed_w", 44) + 4:
+        if self.anim_max.endValue() == getattr(self, "_collapsed_w", 44):
             self.slider.hide()
             self.lbl_percent.hide()
+            # Repaint the area exposed by the transparent control as it shrinks.
+            parent = self.parentWidget()
+            if parent is not None:
+                parent.update()
 
     def _layout_strip(self, btn_size: int) -> None:
         """Place strip + percent so the groove hugs the mute circle like old builds."""
