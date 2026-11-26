@@ -2033,16 +2033,17 @@ class _LinuxEdgeResizeFilter(QObject):
     same approach as Windows — app-wide filters miss presses under the title bar.
     """
 
-    def __init__(self, window: QWidget):
+    def __init__(self, window: QWidget, *, snap_to_top: bool = True):
         super().__init__(window)
         self._window = window
+        self._snap_to_top = snap_to_top
         self._title_drag_offset: QPoint | None = None
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
 
     def begin_title_drag(self, global_pos: QPoint) -> None:
-        if sys.platform != "win32":
+        if sys.platform != "win32" and self._snap_to_top:
             _linux_unsnap_from_fake_maximize(self._window, global_pos)
         self._title_drag_offset = global_pos - self._window.pos()
         try:
@@ -2055,18 +2056,29 @@ class _LinuxEdgeResizeFilter(QObject):
             return False
 
         et = event.type()
-        if et in (
-            QEvent.Type.MouseButtonRelease,
+        if et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            # A new gesture can arrive after a popup consumed the previous release.
+            self._end_title_drag(snap=False)
+            return False
+        if isinstance(obj, QWidget) and obj.window() is not self._window:
+            return False
+        if obj is self._window and et in (
             QEvent.Type.WindowDeactivate,
             QEvent.Type.Hide,
             QEvent.Type.Close,
         ):
+            self._end_title_drag(snap=False)
+            return False
+        if et == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
             self._end_title_drag()
             return False
         if et == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
             self._end_title_drag()
             return True
         if et == QEvent.Type.MouseMove:
+            if not event.buttons() & Qt.MouseButton.LeftButton:
+                self._end_title_drag(snap=False)
+                return False
             global_pos = (
                 event.globalPosition().toPoint()
                 if hasattr(event, "globalPosition")
@@ -2076,14 +2088,16 @@ class _LinuxEdgeResizeFilter(QObject):
             return True
         return False
 
-    def _end_title_drag(self) -> None:
+    def _end_title_drag(self, *, snap: bool = True) -> None:
         self._title_drag_offset = None
         try:
-            self._window.releaseMouse()
+            if QWidget.mouseGrabber() is self._window:
+                self._window.releaseMouse()
         except Exception:
             pass
         if sys.platform != "win32":
-            _linux_snap_title_drag_to_top(self._window)
+            if snap and self._snap_to_top:
+                _linux_snap_title_drag_to_top(self._window)
             win = self._window
             QTimer.singleShot(0, lambda w=win: _linux_refresh_traffic_lights(w))
 

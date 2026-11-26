@@ -29,7 +29,11 @@ from steempeg.ui.icon_utils import (
     square_fit_pixmap,
 )
 from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES, apply_dark_combo_popup
-from steempeg.ui.window_chrome import _TrafficLight
+from steempeg.ui.window_chrome import (
+    _LinuxEdgeResizeFilter,
+    _TrafficLight,
+    _linux_prefer_manual_resize,
+)
 
 _CARD_RADIUS_PX = 10
 
@@ -52,6 +56,9 @@ class _DialogTitleBar(QWidget):
         super().__init__(parent)
         self._dialog = dialog
         self._drag_offset: QPoint | None = None
+        self._linux_drag = None
+        if sys.platform.startswith("linux") and _linux_prefer_manual_resize():
+            self._linux_drag = _LinuxEdgeResizeFilter(dialog, snap_to_top=False)
         self.setObjectName("SteempegDialogBar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(tok.TITLE_BAR_HEIGHT)
@@ -73,6 +80,8 @@ class _DialogTitleBar(QWidget):
             pixmap = app_logo_pixmap(icon_sz)
         if pixmap is not None and not pixmap.isNull():
             icon_lbl = QLabel()
+            if self._linux_drag is not None:
+                icon_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             if not icon_path:
                 icon_lbl.setObjectName("SteempegBrandLogo")
             apply_square_icon(icon_lbl, pixmap, icon_sz)
@@ -80,6 +89,8 @@ class _DialogTitleBar(QWidget):
             root.addSpacing(7)
 
         title_lbl = QLabel(title)
+        if self._linux_drag is not None:
+            title_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         title_lbl.setObjectName("SteempegDialogTitle")
         font = QFont()
         font.setFamilies(["Cascadia UI", "Segoe UI Variable", "Segoe UI"])
@@ -194,7 +205,11 @@ class _DialogTitleBar(QWidget):
     # --- Drag the frameless dialog by its title bar -----------------------
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            # Wayland/X11: compositor-owned move (manual QWidget.move is often ignored).
+            self._drag_offset = None
+            if self._linux_drag is not None:
+                self._linux_drag.begin_title_drag(event.globalPosition().toPoint())
+                event.accept()
+                return
             handle = self._dialog.windowHandle()
             if handle is not None:
                 try:
@@ -280,15 +295,19 @@ class SteempegDialog(QDialog):
         super().__init__(parent)
         self._map_suppressed = bool(suppress_map)
         self._map_host = None
+        # GNOME attaches modal X11 dialogs to their parent and ignores moves.
+        # A regular top-level window keeps Qt modality but can move on its own.
+        window_type = Qt.WindowType.Dialog
+        if sys.platform.startswith("linux") and QApplication.platformName() == "xcb":
+            window_type = Qt.WindowType.Window
+        self._dialog_window_flags = window_type | Qt.WindowType.FramelessWindowHint
         if self._map_suppressed:
             # Demote BEFORE any polish/winId — embedded widget, not a top-level window.
             self.setWindowFlags(Qt.WindowType.Widget)
             self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         else:
-            self.setWindowFlags(
-                Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint
-            )
+            self.setWindowFlags(self._dialog_window_flags)
 
         from steempeg.ui import ui_theme as ut
 
@@ -389,7 +408,7 @@ class SteempegDialog(QDialog):
             self._map_host = host
         host = self._map_host or host
         flags = self.windowFlags()
-        already_dialog = bool(flags & Qt.WindowType.Dialog)
+        already_dialog = (flags & self._dialog_window_flags) == self._dialog_window_flags
 
         self._map_suppressed = False
         self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
@@ -398,9 +417,7 @@ class SteempegDialog(QDialog):
             # One-time promote from garage Widget → frameless Dialog.
             if host is not None:
                 self.setParent(host)
-            self.setWindowFlags(
-                Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint
-            )
+            self.setWindowFlags(self._dialog_window_flags)
             self.hide()
 
         # Must be True before the window is exposed — opaque HWND = black corners
@@ -418,15 +435,13 @@ class SteempegDialog(QDialog):
         """
         if not self._map_suppressed:
             return
-        if self.windowFlags() & Qt.WindowType.Dialog:
+        if (self.windowFlags() & self._dialog_window_flags) == self._dialog_window_flags:
             return
         self._map_host = host
         # Stay DontShowOnScreen for the entire promote — no visible flash.
         self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
         self.setParent(host)
-        self.setWindowFlags(
-            Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint
-        )
+        self.setWindowFlags(self._dialog_window_flags)
         self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
         # Build the HWND already translucent so later opens keep rounded corners.
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
