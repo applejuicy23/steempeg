@@ -179,20 +179,34 @@ def _bat_require_install_folder(abort_label: str) -> str:
 
 
 def _sh_require_install_folder(relaunch_name: str) -> str:
-    """Bash lines that stop unless the working directory is named Steempeg.
+    """Require a supported Unix install directory before replacing its files.
 
     On refusal the log goes to the temp directory, not into the user's folder,
     and the existing launcher is started again.
     """
-    relaunch = (relaunch_name or "").replace('"', "")
+    relaunch = _sh_quote(f"./{relaunch_name}" if relaunch_name else "")
     return f"""folder=$(basename "$PWD" | tr '[:upper:]' '[:lower:]')
-if [[ "$folder" != "steempeg" ]]; then
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) refused: install folder is not named Steempeg ($PWD)" >> "${{TMPDIR:-/tmp}}/steempeg_update_install.log"
-  if [[ -n "{relaunch}" && -e "./{relaunch}" ]]; then
-    exec "./{relaunch}"
+launcher={relaunch}
+refuse_install() {{
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) refused: $1 ($PWD)" >> "${{TMPDIR:-/tmp}}/steempeg_update_install.log"
+  if [[ -n "$launcher" && -x "$launcher" ]]; then
+    exec "$launcher"
   fi
   exit 1
+}}
+if [[ -e .git ]]; then
+  refuse_install "install folder is a Git checkout"
 fi
+case "$folder" in
+  steempeg) ;;
+  steempeg-linux|steempeg-steamdeck)
+    if [[ ! -x "$launcher" ]] ||
+       [[ ! -d _internal && ! -f steempeg/version.py ]]; then
+      refuse_install "portable Steempeg layout not found"
+    fi
+    ;;
+  *) refuse_install "unsupported Steempeg install folder name" ;;
+esac
 """
 
 
@@ -322,7 +336,10 @@ set -euo pipefail
 cd {_sh_quote(exe_dir)}
 while kill -0 {int(handler_pid)} 2>/dev/null; do sleep 0.4; done
 sleep 0.4
-{_sh_require_install_folder(new_exe_name)}
+{_sh_require_install_folder(find_app_executable(exe_dir))}
+if [[ ! -f {_sh_quote(os.path.join(source_dir, new_exe_name))} ]]; then
+  refuse_install "launcher missing from the update archive"
+fi
 PRESERVE=({preserve_list})
 should_keep() {{
   local n="$1"
