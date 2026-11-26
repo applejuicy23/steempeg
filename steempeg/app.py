@@ -6812,7 +6812,16 @@ def main():
         os.environ["QT_QPA_PLATFORMTHEME"] = "generic"
         QApplication.setAttribute(_Qt.ApplicationAttribute.AA_DontUseNativeDialogs)
 
-    app = QApplication(sys.argv)
+    from steempeg.infra.cache import read_json
+    from steempeg.ui.settings_prefs import (
+        KEY_INTERFACE_SCALE, normalize_interface_scale, qt_interface_scale,
+    )
+
+    settings = read_json(os.path.join(get_save_directory(), "cache", "settings.json"))
+    if not isinstance(settings, dict):
+        settings = {}
+    with qt_interface_scale(normalize_interface_scale(settings.get(KEY_INTERFACE_SCALE))):
+        app = QApplication(sys.argv)
     app.setApplicationName("Steempeg")
     app.setApplicationDisplayName("Steempeg")
     from steempeg.ui.popup_dismiss import install_popup_opener_dismiss
@@ -6868,9 +6877,6 @@ def main():
 
     from steempeg.ui.icon_utils import app_window_icon
     from steempeg.ui.settings_prefs import resolve_steempeg_pro
-    from steempeg.infra.cache import read_json
-
-    settings = read_json(os.path.join(get_save_directory(), "cache", "settings.json")) or {}
     from steempeg.ui.settings_prefs import load_hide_kofi
 
     apply_pro_appearance(resolve_steempeg_pro(settings), settings)

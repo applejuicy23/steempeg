@@ -4,6 +4,41 @@ from __future__ import annotations
 import logging
 import os
 import time
+from contextlib import contextmanager
+
+# ----- Interface scale -----
+
+KEY_INTERFACE_SCALE = "interface_scale"
+_INTERFACE_SCALE_PERCENTAGES = (*range(50, 130, 10), 125, 130, 140, 150)
+INTERFACE_SCALE_LABELS = (
+    (0, "Auto (system)"),
+    *((percent, f"{percent}%") for percent in _INTERFACE_SCALE_PERCENTAGES),
+)
+
+
+def normalize_interface_scale(value: object) -> int:
+    if type(value) is int and value in _INTERFACE_SCALE_PERCENTAGES:
+        return value
+    return 0
+
+
+@contextmanager
+def qt_interface_scale(percent: int):
+    """Apply the saved scale while Qt initializes without leaking it to child processes."""
+    if not percent:
+        yield
+        return
+
+    key = "QT_SCALE_FACTOR"
+    previous = os.environ.get(key)
+    os.environ[key] = str(percent / 100)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
 
 # ----- Default Render panel tab -----
 

@@ -156,6 +156,7 @@ from steempeg.ui.settings_prefs import (
     DEFAULT_MARKERS_ON_STRIP,
     DISPLAY_TIMEZONE_LABELS,
     HWDEC_LABELS,
+    INTERFACE_SCALE_LABELS,
     KEY_APP_LOG_LEVEL,
     KEY_CLOCK_FORMAT,
     KEY_CONFIRM_BEFORE_DELETE,
@@ -171,6 +172,7 @@ from steempeg.ui.settings_prefs import (
     KEY_DISPLAY_TIMEZONE,
     KEY_FFMPEG_LOG_LEVEL,
     KEY_HWDEC_PREVIEW,
+    KEY_INTERFACE_SCALE,
     KEY_MARKER_TRIM_OFFSET_MS,
     KEY_MARKERS_ON_STRIP,
     KEY_MEDIA_CACHE_LIMIT_GB,
@@ -242,6 +244,7 @@ from steempeg.ui.settings_prefs import (
     load_startup_library_scan,
     load_test_new_fullscreen,
     normalize_clock_format,
+    normalize_interface_scale,
     normalize_date_format,
     normalize_deck_controls,
     normalize_deck_controls_style,
@@ -902,6 +905,33 @@ class SettingsDialog(SteempegDialog):
 
 
         yield
+
+        v.addWidget(self._section("Interface scale"))
+        scale_row = QHBoxLayout()
+        scale_label = QLabel("Scale")
+        scale_label.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_interface_scale = QComboBox()
+        self._combo_interface_scale.setMaxVisibleItems(8)
+        from steempeg.ui.library.library_styles import install_library_vertical_scrollbar
+
+        scale_options = self._combo_interface_scale.view()
+        install_library_vertical_scrollbar(scale_options)
+        scale_options.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scale_label.setBuddy(self._combo_interface_scale)
+        for value, label in INTERFACE_SCALE_LABELS:
+            self._combo_interface_scale.addItem(label, value)
+        percent = normalize_interface_scale(settings.get(KEY_INTERFACE_SCALE))
+        self._combo_interface_scale.setCurrentIndex(self._combo_interface_scale.findData(percent))
+        scale_row.addWidget(scale_label)
+        scale_row.addWidget(self._combo_interface_scale, 1)
+        restart_scale = QPushButton("Restart app")
+        restart_scale.clicked.connect(self._restart_app)
+        scale_row.addWidget(restart_scale)
+        v.addLayout(scale_row)
+        v.addWidget(self._hint(
+            "Scales the interface relative to the system display scale. Takes effect after restarting Steempeg.",
+            optional=False,
+        ))
 
         v.addWidget(self._section("Side panels"))
         sides_row = QHBoxLayout()
@@ -3685,6 +3715,9 @@ class SettingsDialog(SteempegDialog):
 
         ui_theme = normalize_ui_theme(self._combo_ui_theme.currentData())
         pending[KEY_UI_THEME] = ui_theme
+        pending[KEY_INTERFACE_SCALE] = normalize_interface_scale(
+            self._combo_interface_scale.currentData()
+        )
         opened_theme = normalize_ui_theme(
             getattr(self, "_committed_ui_theme", DEFAULT_UI_THEME)
         )
