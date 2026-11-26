@@ -4,7 +4,9 @@ Pure logic - no Qt. Runs tiny throwaway ffmpeg encodes to see which encoders
 work here, and relies on ffmpeg being on PATH (the app prepends ./bin at startup).
 """
 import functools
+import glob
 import os
+import shutil
 import subprocess
 import sys
 
@@ -19,12 +21,51 @@ _HW_ENCODERS = [
 ]
 _CPU_ENCODER = ("CPU (Software)", "libx264")
 
+_AV1_CODECS = ("libsvtav1", "av1_nvenc", "av1_amf", "av1_qsv", "av1_vaapi")
 _OPTIONAL_VIDEO_CODECS = [
-    ("AV1", ("libsvtav1", "av1_nvenc", "av1_amf", "av1_qsv")),
+    ("AV1", _AV1_CODECS),
     ("VP9", ("libvpx-vp9",)),
 ]
 
 _SOFTWARE_CODECS = frozenset({"libx264", "libx265", "libsvtav1", "libvpx-vp9"})
+_VAAPI_CODECS = {
+    "h264_vaapi": "libx264",
+    "hevc_vaapi": "libx265",
+    "av1_vaapi": "libsvtav1",
+}
+
+
+def vaapi_software_encoder(codec: str) -> str | None:
+    """Return the same video codec's software encoder for a VAAPI preset."""
+    return _VAAPI_CODECS.get(codec)
+
+
+def vaapi_device(codec: str, ffmpeg_exe: str = "ffmpeg") -> str | None:
+    """Select a Linux render node that can encode this codec."""
+    if not sys.platform.startswith("linux") or codec not in _VAAPI_CODECS:
+        return None
+    executable = shutil.which(ffmpeg_exe)
+    return _probe_vaapi_device(os.path.realpath(executable), codec) if executable else None
+
+
+@functools.lru_cache(maxsize=None)
+def _probe_vaapi_device(executable: str, codec: str) -> str | None:
+    for device in sorted(glob.glob("/dev/dri/renderD*")):
+        cmd = [
+            executable, "-v", "error", "-vaapi_device", device,
+            "-f", "lavfi", "-i", "color=black:s=640x480:r=30",
+            "-vf", "format=nv12,hwupload", "-frames:v", "1",
+            "-c:v", codec, "-b:v", "1M", "-f", "null", "-",
+        ]
+        try:
+            result = subprocess.run(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
+            return device
+    return None
 
 
 @functools.lru_cache(maxsize=None)
@@ -34,6 +75,8 @@ def _encoder_works(test_code):
     Cached per session: callers sit on UI paths (queue add, settings snapshot)
     and each uncached probe is a full ffmpeg spawn.
     """
+    if test_code in _VAAPI_CODECS:
+        return vaapi_device(test_code) is not None
     cmd = [
         "ffmpeg", "-y", "-f", "lavfi", "-i", "color=black:s=640x480:r=1",
         "-frames:v", "1", "-pix_fmt", "yuv420p", "-c:v", test_code,
@@ -79,6 +122,8 @@ def detect_supported_encoders():
         # Accept H.264 OR HEVC success — some drivers expose only one variant.
         if any(_encoder_works(code) for code in probes):
             supported.append((name, expose))
+    if vaapi_device("h264_vaapi") or vaapi_device("hevc_vaapi"):
+        supported.append(("VAAPI (Linux GPU)", "h264_vaapi"))
 
     # Always offer software encode as the last resort.
     supported.append(_CPU_ENCODER)
@@ -103,7 +148,7 @@ def detect_optional_video_codecs():
 
 
 def av1_encoder_available() -> bool:
-    return any(_encoder_works(code) for code in ("libsvtav1", "av1_nvenc", "av1_amf", "av1_qsv"))
+    return any(_encoder_works(code) for code in _AV1_CODECS)
 
 
 def hardware_av1_encoder(base_encoder: str) -> str | None:
@@ -119,6 +164,8 @@ def hardware_av1_encoder(base_encoder: str) -> str | None:
         code = "av1_amf"
     elif "qsv" in base:
         code = "av1_qsv"
+    elif base.endswith("_vaapi"):
+        code = "av1_vaapi"
     else:
         return None
     return code if _encoder_works(code) else None

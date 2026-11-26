@@ -137,6 +137,17 @@ def resolve_video_encoder(codec_text: str, base_encoder: str, available_av1: boo
     if "VP9" in codec:
         return "libvpx-vp9"
 
+    if base.endswith("_vaapi"):
+        from steempeg.core.capabilities import vaapi_device, vaapi_software_encoder
+
+        if "AV1" in codec:
+            encoder = "av1_vaapi"
+        elif "H.265" in codec or "HEVC" in codec.upper():
+            encoder = "hevc_vaapi"
+        else:
+            encoder = "h264_vaapi"
+        return encoder if vaapi_device(encoder) else vaapi_software_encoder(encoder)
+
     if "AV1" in codec:
         from steempeg.core.capabilities import hardware_av1_encoder
 

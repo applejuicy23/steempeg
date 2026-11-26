@@ -37,6 +37,8 @@ def encoder_family(encoder: str) -> str:
         return "amf"
     if "qsv" in enc:
         return "qsv"
+    if enc.endswith("_vaapi"):
+        return "vaapi"
     if enc == "libsvtav1":
         return "svtav1"
     if enc == "libvpx-vp9":
@@ -52,6 +54,7 @@ def encode_speed_hint(family: str) -> str:
         "vp9": "VP9 deadline / cpu-used tradeoff",
         "amf": "AMD AMF quality: speed ↔ quality",
         "qsv": "Intel QuickSync preset",
+        "vaapi": "VAAPI uses the GPU driver's encode settings",
     }
     return hints.get(family, "Encoder speed vs quality tradeoff")
 

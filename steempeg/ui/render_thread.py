@@ -17,6 +17,7 @@ import psutil
 
 from PySide6.QtCore import QThread, Signal
 
+from steempeg.core.capabilities import vaapi_device, vaapi_software_encoder
 from steempeg.render.output_formats import build_audio_args, video_encoder_extra_args
 from steempeg.render import pro_encoding as pro
 from steempeg.render.gpu_decode import (
@@ -37,6 +38,10 @@ def _popen_cmdline(cmd: str, *, cwd: str | None, creation_flags: int, priority: 
 
     return popen_render_command(cmd, cwd=cwd, creation_flags=creation_flags,
                                 priority=priority, **kwargs)
+
+
+class _VaapiEncodeFailed(RuntimeError):
+    pass
 
 
 class RenderThread(QThread):
@@ -400,6 +405,19 @@ class RenderThread(QThread):
             )
             return
 
+        try:
+            try:
+                self._run_export(self.selected_encoder)
+            except _VaapiEncodeFailed as exc:
+                self._check_cancelled()
+                software_encoder = vaapi_software_encoder(self.selected_encoder)
+                logging.warning("VAAPI encode failed; retrying the export with %s. %s", software_encoder, exc)
+                self.progress_signal.emit("Retrying with CPU…")
+                self._run_export(software_encoder)
+        except Exception as exc:
+            self.finished_signal.emit(False, str(exc), "")
+
+    def _run_export(self, encoder: str) -> None:
         temp_files = []
         two_pass_logs: list[str] = []
         concat_file = None
@@ -409,6 +427,18 @@ class RenderThread(QThread):
         self._stream_copy_used = False
         try:
             creation_flags = 0x08000000 if sys.platform == "win32" else 0
+            device_args = ""
+            upload = ""
+            software_encoder = vaapi_software_encoder(encoder)
+            if software_encoder and not self.audio_only:
+                device = vaapi_device(encoder, self.ffmpeg_exe)
+                if device:
+                    device_args = f'-vaapi_device "{device}" '
+                    upload = ",format=nv12,hwupload"
+                    logging.info("VAAPI export selected: %s on %s", encoder, device)
+                else:
+                    logging.warning("VAAPI device unavailable for %s; using %s", encoder, software_encoder)
+                    encoder = software_encoder
             # Get the target extension (.mp4, .mp3, .aac) from the final output file
             _, ext = os.path.splitext(self.output_file)
             
@@ -480,7 +510,7 @@ class RenderThread(QThread):
                 base_audio = build_audio_args(
                     self.audio_format, self.audio_bitrate_kbps, self.mute_audio
                 )
-                enc = self.selected_encoder
+                enc = encoder
                 v_extra = (
                     pro.preset_args(enc, self.preset)
                     or video_encoder_extra_args(enc, self.encode_speed)
@@ -501,9 +531,9 @@ class RenderThread(QThread):
                         # and run longer than the trim handles. Re-encode the window.
                         bitrate = self.video_bitrate or "12M"
                         cmd = (
-                            f'"{self.ffmpeg_exe}" -ss {self.trim_start_sec:.3f} {input_fix}'
+                            f'"{self.ffmpeg_exe}" {device_args}-ss {self.trim_start_sec:.3f} {input_fix}'
                             f'-i "{safe_mpd}" -t {self.trim_duration_sec:.3f} '
-                            f'-vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" {fps_arg}{v_extra}'
+                            f'-vf "scale=trunc(iw/2)*2:trunc(ih/2)*2{upload}" {fps_arg}{v_extra}'
                             f'-c:v {enc} -b:v {bitrate} {pix_args}{base_audio} -y "{temp_mp4}"'
                         )
                     else:
@@ -523,7 +553,7 @@ class RenderThread(QThread):
                         scale_filter = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
                     
                     video = (
-                        f'{trim_args}-i "{safe_mpd}" -vf "{scale_filter}" {fps_arg}{v_extra}'
+                        f'{device_args}{trim_args}-i "{safe_mpd}" -vf "{scale_filter}{upload}" {fps_arg}{v_extra}'
                         f"-c:v {enc} -b:v {self.video_bitrate} -maxrate {self.video_bitrate} "
                         f"-bufsize {bufsize} {pix_args}"
                     )
@@ -551,7 +581,11 @@ class RenderThread(QThread):
                             rate_args = pro.constant_quality_args(enc, self.quality_value)
                         else:
                             rate_args = f"-b:v {self.video_bitrate} "
-                        cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" -vf scale=-2:{target_height} {fps_arg}{v_extra}-c:v {enc} {rate_args}{pix_args}{base_audio} -y "{temp_mp4}"'
+                        cmd = (
+                            f'"{self.ffmpeg_exe}" {device_args}{trim_args}-i "{safe_mpd}" '
+                            f'-vf "scale=-2:{target_height}{upload}" {fps_arg}{v_extra}'
+                            f'-c:v {enc} {rate_args}{pix_args}{base_audio} -y "{temp_mp4}"'
+                        )
                     else:
                         self._stream_copy_used = True
                         cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" {fps_arg}-c copy {copy_ts_fix}-y "{temp_mp4}"'
@@ -563,17 +597,22 @@ class RenderThread(QThread):
 
                 runs = pre_cmds + [cmd]
                 for step, run_cmd in enumerate(runs):
-                    self._run_encoded_part(
-                        run_cmd,
-                        mpd=mpd,
-                        temp_mp4=temp_mp4,
-                        cwd=os.path.dirname(mpd),
-                        creation_flags=creation_flags,
-                        part_index=idx,
-                        expected_duration=expected_duration,
-                        step=step,
-                        steps=len(runs),
-                    )
+                    try:
+                        self._run_encoded_part(
+                            run_cmd,
+                            mpd=mpd,
+                            temp_mp4=temp_mp4,
+                            cwd=os.path.dirname(mpd),
+                            creation_flags=creation_flags,
+                            part_index=idx,
+                            expected_duration=expected_duration,
+                            step=step,
+                            steps=len(runs),
+                        )
+                    except Exception as exc:
+                        if upload and f"-c:v {enc} " in run_cmd and not self.is_cancelled:
+                            raise _VaapiEncodeFailed(str(exc)) from exc
+                        raise
 
                 part_count = len(self.mpd_paths)
                 self._report_part_progress(idx, part_count, (idx + 1) * 100.0 / part_count)
@@ -677,9 +716,6 @@ class RenderThread(QThread):
                     logging.error("Merge failed:\n" + "\n".join(merge_tail))
                     self.finished_signal.emit(False, "Merge failed.", "")
 
-        except Exception as e:
-            self.finished_signal.emit(False, str(e), "") # error
-            
         finally:
             # STEP 3: CLEANING. Remove all temporary debris
             if concat_file and os.path.exists(concat_file):
