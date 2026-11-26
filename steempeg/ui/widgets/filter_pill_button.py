@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter
+from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter
 from PySide6.QtWidgets import QPushButton, QWidget
 
 from steempeg.ui.pro_appearance import accent_qcolor
@@ -76,6 +76,7 @@ class FilterPillButton(QWidget):
         self._dense = COMFORT
         self._badge_side = 17
         self._watched: list[QObject] = []
+        self._filter_popup: QWidget | None = None
 
         self._btn = QPushButton(self)
         self._btn.setObjectName("FilterPill")
@@ -191,6 +192,10 @@ class FilterPillButton(QWidget):
         super().setEnabled(enabled)
         self._btn.setEnabled(enabled)
 
+    def track_filter_popup(self, popup: QWidget) -> None:
+        self._filter_popup = popup
+        popup.installEventFilter(self)
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._btn.setGeometry(0, 0, self.width(), self.height())
@@ -210,6 +215,20 @@ class FilterPillButton(QWidget):
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
         et = event.type()
+        if watched is self._filter_popup:
+            if et == QEvent.Type.Show:
+                self._btn.setDown(True)
+            elif et == QEvent.Type.Hide:
+                self._filter_popup = None
+                watched.removeEventFilter(self)
+                self._btn.setDown(False)
+                # The popup can grab the mouse before the opener receives Leave.
+                over_button = self.isVisible() and self._btn.rect().contains(
+                    self._btn.mapFromGlobal(QCursor.pos())
+                )
+                self._btn.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, over_button)
+                self._btn.update()
+            return False
         if et in (
             QEvent.Type.Move,
             QEvent.Type.Resize,

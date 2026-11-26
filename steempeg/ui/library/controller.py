@@ -7306,6 +7306,7 @@ class LibraryMixin:
 
         # Size + place while hidden, then show once — avoids stack↔3-col flash.
         self._position_filter_menu(relayout=True)
+        self.btn_filter_pill.track_filter_popup(menu)
         menu.show()
         menu.raise_()
         menu.activateWindow()

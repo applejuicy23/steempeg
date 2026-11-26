@@ -5196,6 +5196,7 @@ class RenderedLibraryMixin:
         if dense is not None and hasattr(self.screenshots_filter_menu, "apply_density"):
             self.screenshots_filter_menu.apply_density(dense)
         self._position_screenshots_filter_menu()
+        self.btn_filter_pill.track_filter_popup(self.screenshots_filter_menu)
         self.screenshots_filter_menu.show()
         QTimer.singleShot(0, self._position_screenshots_filter_menu)
 
@@ -6257,6 +6258,7 @@ class RenderedLibraryMixin:
         if dense is not None and hasattr(self.rendered_filter_menu, "apply_density"):
             self.rendered_filter_menu.apply_density(dense)
         self._position_rendered_filter_menu()
+        self.btn_filter_pill.track_filter_popup(self.rendered_filter_menu)
         self.rendered_filter_menu.show()
         QTimer.singleShot(0, self._position_rendered_filter_menu)
 
