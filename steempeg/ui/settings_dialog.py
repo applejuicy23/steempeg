@@ -7,7 +7,7 @@ import time
 from copy import deepcopy
 
 from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, QSize, QTimer
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -1995,17 +1995,13 @@ class SettingsDialog(SteempegDialog):
 
         lbl = QLabel(text)
         lbl.setWordWrap(True)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         lbl.setStyleSheet(_HINT)
-        font = QFont()
-        font.setFamilies(["Segoe UI", "Noto Sans", "Arial"])
-        font.setPointSize(11)
-        lbl.setFont(font)
-        line_h = max(QFontMetrics(font).height(), 14)
-
+        lbl.ensurePolished()
         icon_sz = 12
         icon_lbl = QLabel()
-        # Slot = one text line so the glyph sits on the same center as the first line.
-        icon_lbl.setFixedSize(icon_sz, line_h)
+        # Use the actual styled font, including when the text wraps.
+        icon_lbl.setFixedSize(icon_sz, max(icon_sz, lbl.fontMetrics().height()))
         icon_lbl.setStyleSheet("background: transparent; border: none; padding: 0;")
         pix = title_bar_info_pixmap(tok.TEXT_MUTED, icon_sz)
         if pix is not None and not pix.isNull():
