@@ -738,6 +738,9 @@ class SettingsDialog(SteempegDialog):
             spin.setRange(0, 100)
             spin.setSuffix(" %")
             spin.setValue(int(value))
+            if sys.platform.startswith("linux"):
+                # The spin box's editor paints almost against the left border on Linux.
+                spin.lineEdit().setTextMargins(8, 0, 0, 0)
             # 112 is the narrowest width where "100 %" still fits this field.
             spin.setFixedWidth(120)
             spin.setCursor(Qt.CursorShape.PointingHandCursor)

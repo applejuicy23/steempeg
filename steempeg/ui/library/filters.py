@@ -6,6 +6,7 @@ rather than importing it, so this module stays free of any back-reference to the
 from steempeg.ui import design_tokens as tok
 import os
 import re
+import sys
 import tempfile
 
 from PySide6.QtCore import Qt, QDate, QDateTime, QPoint, QTime, QSize, QTimer, Signal
@@ -465,6 +466,12 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             de.setDisplayFormat("HH:mm:ss")
             de.setStyleSheet(smart_input_style)
             de.setCursor(Qt.PointingHandCursor)
+        if sys.platform.startswith("linux"):
+            for field in (
+                self.input_min_time, self.input_max_time,
+                self.input_min_dur, self.input_max_dur,
+            ):
+                field.lineEdit().setTextMargins(8, 0, 0, 0)
         self._dur_capsule = create_category_capsule(
             "⏱ Duration:",
             _bound_row_29("⏱ Min:", self.input_min_dur, "⏱ Max:", self.input_max_dur),

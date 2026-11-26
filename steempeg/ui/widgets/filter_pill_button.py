@@ -316,8 +316,9 @@ class FilterPillButton(QWidget):
         out_x = 5 if not self._dense.compact else 4
         out_y = 4 if not self._dense.compact else 3
         corner = self.mapTo(host, QPoint(self.width(), 0))
-        x = int(corner.x() - side + out_x)
-        y = int(corner.y() - out_y)
+        # Qt clips child widgets at the host edges, even on the floating layer.
+        x = max(0, min(corner.x() - side + out_x, host.width() - side))
+        y = max(0, min(corner.y() - out_y, host.height() - side))
         self._badge.move(x, y)
         self._badge.show()
         self._badge.raise_()
