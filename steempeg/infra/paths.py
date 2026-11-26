@@ -141,6 +141,7 @@ def display_path(path: str) -> str:
 # applications must retain the desktop's own platform/theme and GL selection.
 _DESKTOP_ENV_KEYS = (
     "QT_QPA_PLATFORM", "QT_QPA_PLATFORMTHEME", "QT_XCB_GL_INTEGRATION",
+    "QT_SCALE_FACTOR",
     "QT_STYLE_OVERRIDE", "QT_LOGGING_RULES", "QT_PLUGIN_PATH",
     "QT_QPA_PLATFORM_PLUGIN_PATH", "FONTCONFIG_FILE", "LIBGL_ALWAYS_SOFTWARE",
     "GALLIUM_DRIVER", "QT_OPENGL",
@@ -161,6 +162,24 @@ def _linux_desktop_env() -> dict[str, str]:
             env.pop(key, None)
         else:
             env[key] = original
+    pack_root = env.pop("STEEMPEG_PACK_ROOT", "")
+    if pack_root:
+        # The portable launcher sets these before Python can snapshot the session.
+        if env.get("QT_QPA_PLATFORM") == "xcb":
+            env.pop("QT_QPA_PLATFORM")
+        root = os.path.realpath(pack_root)
+        for key in ("LD_LIBRARY_PATH", "PATH"):
+            if key not in env:
+                continue
+            entries = [
+                entry for entry in env[key].split(os.pathsep)
+                if entry and not os.path.realpath(entry).startswith(root + os.sep)
+                and os.path.realpath(entry) != root
+            ]
+            if entries:
+                env[key] = os.pathsep.join(entries)
+            else:
+                del env[key]
     try:
         uid = os.getuid()
     except AttributeError:
