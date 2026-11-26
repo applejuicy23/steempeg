@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from steempeg.core.rendered_media import is_sane_media_duration
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui.icon_assets import tinted_pixmap
 from steempeg.ui.player.mpv_osd import MpvPlayPausePulse
@@ -161,9 +162,17 @@ class _TopStrip(QWidget):
         """Builds the strip for ``window`` (move / minimize / maximize / close)."""
         super().__init__(window)
         from steempeg.ui.icon_utils import apply_square_icon
-        from steempeg.ui.window_chrome import _TrafficLight, app_logo_pixmap
+        from steempeg.ui.window_chrome import (
+            _LinuxEdgeResizeFilter,
+            _TrafficLight,
+            _linux_prefer_manual_resize,
+            app_logo_pixmap,
+        )
 
         self._window = window
+        self._linux_drag = None
+        if sys.platform.startswith("linux") and _linux_prefer_manual_resize():
+            self._linux_drag = _LinuxEdgeResizeFilter(window)
         self.setFixedHeight(_TOP_STRIP_H)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 0, 14, 0)
@@ -188,17 +197,24 @@ class _TopStrip(QWidget):
 
     def toggle_maximized(self) -> None:
         """Maximizes the window or restores it."""
-        if self._window.isMaximized():
+        if self._linux_drag is not None:
+            from steempeg.ui.window_chrome import win32_window_command
+
+            win32_window_command(self._window, "maximize_toggle")
+        elif self._window.isMaximized():
             self._window.showNormal()
         else:
             self._window.showMaximized()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 — Qt override
-        """Starts a native window move when the strip is dragged."""
+        """Moves the Express window when its title strip is dragged."""
         if event.button() == Qt.MouseButton.LeftButton:
-            handle = self._window.windowHandle()
-            if handle is not None:
-                handle.startSystemMove()
+            if self._linux_drag is not None:
+                self._linux_drag.begin_title_drag(event.globalPosition().toPoint())
+            else:
+                handle = self._window.windowHandle()
+                if handle is not None:
+                    handle.startSystemMove()
             event.accept()
             return
         super().mousePressEvent(event)
@@ -286,6 +302,7 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         self._player = None
         self._duration_ms = 0
         self._replay_deadline: float | None = None
+        self._eof_drag_target: int | None = None
         self._was_playing_before_drag = False
         self._render = None
         self._last_output = ""
@@ -733,6 +750,7 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
     def open_clip(self) -> None:
         """Creates the mpv handle on the video surface and starts playing the clip."""
         from steempeg.core.dash.discovery import find_mpd_paths
+        from steempeg.core.dash.mpd import parse_duration_seconds
 
         mpds = find_mpd_paths(self._info.path)
         if not mpds:
@@ -746,6 +764,15 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
             return
         self._install_linux_mpv_pointer_bindings()
         play_path = os.path.abspath(mpds[0]).replace("\\", "/")
+        self._duration_ms = 0
+        try:
+            with open(play_path, encoding="utf-8") as manifest:
+                duration = parse_duration_seconds(manifest.read())
+            if is_sane_media_duration(duration):
+                self._duration_ms = round(duration * 1000)
+        except (OSError, ValueError):
+            logging.debug("Express player: could not read DASH duration", exc_info=True)
+        self._timeline.set_duration(self._duration_ms)
         logging.info("Express player: play %s", play_path)
         self._attach_hover_preview(play_path)
         self._prefetch_marker_sprite()
@@ -912,6 +939,13 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         }
         if sys.platform == "win32":
             opts["ao"] = "wasapi"
+        elif sys.platform.startswith("linux") and QApplication.platformName() == "xcb":
+            # Keep wid= attached to the Qt X11 surface on an XWayland desktop.
+            opts["gpu_context"] = (os.environ.get("STEEMPEG_GPU_CONTEXT") or "").strip() or "x11egl"
+            logging.debug(
+                "Express player: xcb embed wid=%#x gpu_context=%s",
+                opts["wid"], opts["gpu_context"],
+            )
         player = mpv.MPV(**opts)
         player.volume = self._volume.slider.value()
         if sys.platform == "win32":
@@ -938,20 +972,26 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
             at_end = bool(player.eof_reached)
         except Exception:
             return
-        if duration and int(duration * 1000) != self._duration_ms:
-            self._duration_ms = int(duration * 1000)
+        # DASH duration estimates drift as mpv reads the last segments.
+        if not self._duration_ms and is_sane_media_duration(duration):
+            self._duration_ms = round(duration * 1000)
             self._timeline.set_duration(self._duration_ms)
         if position is None and not at_end:
             return
-        position_ms = float(position) * 1000.0 if position is not None else self._duration_ms
+        position_ms = self._duration_ms if at_end else max(0.0, float(position) * 1000)
+        if self._duration_ms:
+            position_ms = min(position_ms, self._duration_ms)
         playing = not paused and not at_end
         if self._replay_deadline is not None:
-            # mpv can still expose the previous frame and EOF while a jump is settling.
-            if (at_end or position_ms > 1000) and time.monotonic() < self._replay_deadline:
+            # mpv can still expose EOF while the new position is loading.
+            if at_end and time.monotonic() < self._replay_deadline:
                 return
             self._replay_deadline = None
             self._timeline.force_jump(position_ms, seek=False)
         self._timeline.set_vlc_time(position_ms, playing)
+        if at_end and self._timeline.canvas.drag_state != "playhead":
+            if self._timeline.canvas.visual_ms != position_ms:
+                self._timeline.force_jump(position_ms, seek=False)
         self._time_label.setText(
             f"{format_player_time(position_ms)} / {format_player_time(self._duration_ms)}"
         )
@@ -990,29 +1030,33 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         self._timeline.force_jump(target)
 
     def _restart_playback(self) -> bool:
-        player = self._player
-        path = player.path if sys.platform.startswith("linux") else None
-        if path and path.lower().endswith(".mpd"):
-            # Seeking a completed DASH stream can leave the Linux demuxer at EOF.
-            player.loadfile(path, start=0)
-        elif not self._seek_ms(0):
+        if not self._seek_ms(0):
             return False
-        self._replay_deadline = time.monotonic() + 1.5
-        self._timeline.force_jump(0, seek=False)
+        if self._replay_deadline is None:
+            self._timeline.force_jump(0, seek=False)
         return True
 
     def _seek_ms(self, ms: float) -> bool:
         """Seeks mpv to an absolute position in milliseconds."""
         if self._player is None:
             return False
+        player = self._player
         target_ms = max(0.0, ms)
         try:
-            self._player.seek(target_ms / 1000.0, reference="absolute", precision="exact")
+            at_end = bool(player.eof_reached)
+            path = player.path if at_end and sys.platform.startswith("linux") else None
+            if path and path.lower().endswith(".mpd"):
+                # A completed DASH stream can keep returning EOF on a normal seek.
+                player.loadfile(path, start=target_ms / 1000.0)
+            else:
+                player.seek(target_ms / 1000.0, reference="absolute", precision="exact")
         except Exception:
             logging.debug("Express player: seek failed", exc_info=True)
             return False
         else:
-            self._replay_deadline = None
+            self._replay_deadline = time.monotonic() + 1.5 if at_end else None
+            if at_end:
+                self._timeline.force_jump(target_ms, seek=False)
             return True
 
     def _on_timeline_press(self) -> None:
@@ -1020,17 +1064,28 @@ class ExpressPlayerWindow(VideoSurfaceInput, QWidget):
         if self._player is None:
             return
         try:
-            self._was_playing_before_drag = not self._player.pause
+            self._was_playing_before_drag = not (self._player.pause or self._player.eof_reached)
             self._player.pause = True
         except Exception:
             self._was_playing_before_drag = False
 
     def _on_timeline_seek(self, position_ms: int) -> None:
         """Seeks to where the timeline was clicked / dragged."""
+        if (
+            self._player is not None
+            and self._timeline.canvas.drag_state == "playhead"
+            and self._player.eof_reached
+        ):
+            self._eof_drag_target = position_ms
+            return
         self._seek_ms(position_ms)
 
     def _on_timeline_release(self) -> None:
         """Resumes playback if it was playing before the drag."""
+        target = self._eof_drag_target
+        self._eof_drag_target = None
+        if target is not None:
+            self._seek_ms(target)
         if self._player is not None and self._was_playing_before_drag:
             try:
                 self._player.pause = False
