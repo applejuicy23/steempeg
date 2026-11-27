@@ -227,7 +227,6 @@ class ReleaseNoticesPopup(QWidget):
         super().__init__(bell, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self._bell = bell
         self._notices = []
-        self.displayed_ids: set[str] = set()
         self._unread: set[str] = set()
         self._list_scroll = 0
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -284,7 +283,6 @@ class ReleaseNoticesPopup(QWidget):
 
     def set_notices(self, notices, unread_ids: set[str]) -> None:
         self._notices = notices
-        self.displayed_ids = {notice.id for notice in notices}
         self._unread = unread_ids
         self._list_scroll = 0
         self._show_list()

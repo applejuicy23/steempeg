@@ -83,10 +83,12 @@ class UpdaterMixin:
         from steempeg.services.release_notices import notices_for_version
 
         self._release_notices = notices_for_version(payload, APP_VERSION_STR)
-        self._refresh_release_notice_bell()
         popup = getattr(self, "_release_notices_popup", None)
         if popup is not None:
             popup.set_notices(self._release_notices, self._unread_release_notice_ids())
+            if popup.isVisible():
+                self._mark_release_notices_read()
+        self._refresh_release_notice_bell()
 
     def _read_release_notice_ids(self) -> list[str]:
         saved = self.load_user_settings().get("read_release_notices", [])
@@ -121,21 +123,28 @@ class UpdaterMixin:
             lambda: QTimer.singleShot(0, self.ui, self.check_for_updates)
         )
         popup.show()
+        if popup.isVisible():
+            self._mark_release_notices_read()
+            self._refresh_release_notice_bell()
+
+    def _mark_release_notices_read(self) -> None:
+        # Save as soon as the inbox shows the notices, even if the app quits
+        # before the user closes it. The open list can still show its New labels.
+        read = self._read_release_notice_ids()
+        already_read = set(read)
+        new = [
+            notice.id for notice in self._release_notices
+            if notice.id not in already_read
+        ]
+        if new:
+            self.save_user_settings("read_release_notices", (new + read)[:64])
 
     def _on_release_notices_closed(self) -> None:
         popup = self._release_notices_popup
         self._release_notices_popup = None
         self.ui.title_bar.btn_release_notices.set_panel_open(False)
-        read = self._read_release_notice_ids()
-        already_read = set(read)
-        new = [
-            notice.id for notice in self._release_notices
-            if notice.id in popup.displayed_ids and notice.id not in already_read
-        ]
-        if new:
-            self.save_user_settings("read_release_notices", (new + read)[:64])
-        self._refresh_release_notice_bell()
-        popup.deleteLater()
+        if popup is not None:
+            popup.deleteLater()
 
     def show_first_launch_release_notes(self, updated_from=None, backup_folder=None) -> None:
         """Show highlights once after an upgrade, including the updater's first launch."""
