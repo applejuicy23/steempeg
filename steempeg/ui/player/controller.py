@@ -646,6 +646,7 @@ class PlayerMixin(VideoSurfaceInput):
 
     def close_current_clip(self):
         """ Completely destroys the current clip and clears the interface. """
+        self._close_desktop_queue_settings()
         # Explicit Close must always work — a stuck switch gate (or Dead export
         # that never finished opening) used to no-op the X forever.
         if getattr(self, "_is_switching", False) or getattr(
@@ -3538,7 +3539,11 @@ class PlayerMixin(VideoSurfaceInput):
             q = ""
             if hasattr(self, "ui") and hasattr(self.ui, "combo_quality"):
                 q = self.ui.combo_quality.currentText() or ""
-            if "Target File Size" in q and hasattr(self, "setup_dynamic_slider"):
+            if (
+                "Target File Size" in q
+                and self._desktop_queue_settings_job() is None
+                and hasattr(self, "setup_dynamic_slider")
+            ):
                 self.setup_dynamic_slider()
         except Exception:
             pass
@@ -3757,6 +3762,7 @@ class PlayerMixin(VideoSurfaceInput):
             if hasattr(self, "clear_clip_open_loading"):
                 self.clear_clip_open_loading()
             return
+        self._close_desktop_queue_settings()
 
         if hasattr(self, "get_rendered_health_report"):
             report = self.get_rendered_health_report(file_path)
@@ -4350,6 +4356,7 @@ class PlayerMixin(VideoSurfaceInput):
         remount=True restarts MPV even if the same folder is already opening.
         mpd_override plays a specific manifest directly (used for salvage manifests
         that the health/discovery scanners intentionally ignore)."""
+        self._close_desktop_queue_settings()
         self._rendered_media_path = None
         # A previous export leaves this set. The rendered-grid click guard treats
         # it as «already playing», so that file would not open again.

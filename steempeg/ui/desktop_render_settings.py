@@ -26,7 +26,7 @@ class DesktopRenderSettingsDialog(SteempegDialog):
     while Like a Portable).
     """
 
-    def __init__(self, app, parent=None):
+    def __init__(self, app, parent=None, *, queue_job_id=None):
         theme = dialog_theme(parent or getattr(app, "ui", None))
         super().__init__(
             "Render Settings",
@@ -37,6 +37,7 @@ class DesktopRenderSettingsDialog(SteempegDialog):
             **theme,
         )
         self._app = app
+        self.queue_job_id = queue_job_id
         self._neo = getattr(app, "neo_wrapper", None)
         self._home = (None, None, -1, "orphan")
         self._returned = False
@@ -150,12 +151,14 @@ class DesktopRenderSettingsDialog(SteempegDialog):
                 pass
 
     def close_and_return(self) -> None:
-        self._return_neo()
-        self.hide()
-        self.deleteLater()
         app = self._app
         if getattr(app, "_desktop_render_settings_dlg", None) is self:
             app._desktop_render_settings_dlg = None
+        if self.queue_job_id is not None:
+            app._end_desktop_queue_settings()
+        self._return_neo()
+        self.hide()
+        self.deleteLater()
         if hasattr(app, "_sync_dash_render_settings_button"):
             try:
                 app._sync_dash_render_settings_button()
@@ -212,10 +215,12 @@ class DesktopRenderSettingsDialog(SteempegDialog):
         self.close_and_return()
 
     def closeEvent(self, event) -> None:
-        self._return_neo()
         app = self._app
         if getattr(app, "_desktop_render_settings_dlg", None) is self:
             app._desktop_render_settings_dlg = None
+        if self.queue_job_id is not None:
+            app._end_desktop_queue_settings()
+        self._return_neo()
         super().closeEvent(event)
         if hasattr(app, "_sync_dash_render_settings_button"):
             try:
@@ -293,10 +298,21 @@ def toggle_desktop_render_settings(app) -> None:
             dlg.close_and_return()
             return
 
-    dlg = DesktopRenderSettingsDialog(app, parent=getattr(app, "ui", None))
+    job = app._status_strip_context_job()
+    if job is not None:
+        if getattr(app, "_clips_scan_active", False):
+            app.set_status("Library is still loading — Queue is locked.")
+            return
+        app._begin_desktop_queue_settings(job)
+
+    dlg = DesktopRenderSettingsDialog(
+        app, parent=getattr(app, "ui", None), queue_job_id=job.id if job else None
+    )
     # __init__ already assigned _desktop_render_settings_dlg and reclaimed neo.
     dlg.setWindowOpacity(0.0)
     dlg.show()
+    if job is not None:
+        app.update_final_setup()
     QTimer.singleShot(_REVEAL_AFTER_MAP_MS, lambda: _reveal_render_settings_dialog(dlg))
     dlg.raise_()
     dlg.activateWindow()

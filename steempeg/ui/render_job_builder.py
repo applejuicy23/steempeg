@@ -73,6 +73,7 @@ def apply_job_settings_to_ui(
     *,
     refresh_summary: bool = True,
     from_preset: bool = False,
+    restore_exact_encoder: bool = False,
 ) -> None:
     """Restore a job's saved settings into the live settings panel.
 
@@ -153,7 +154,11 @@ def apply_job_settings_to_ui(
                 )
                 for i in range(ui.combo_encoder.count())
             )
-            if not from_preset and capabilities.is_software_encoder(saved) and hw_available:
+            if (
+                not (from_preset or restore_exact_encoder)
+                and capabilities.is_software_encoder(saved)
+                and hw_available
+            ):
                 pass  # keep the HW default from detect_gpu_and_set_encoder
             else:
                 matched = False
@@ -483,7 +488,9 @@ def probe_clip_render_defaults(
     }
 
 
-def snapshot_settings_from_ui(app: SteempegApp) -> RenderJobSettings:
+def snapshot_settings_from_ui(
+    app: SteempegApp, *, read_hidden_slider: bool = False
+) -> RenderJobSettings:
     ui = app.ui
     quality = ui.combo_quality.currentText() if hasattr(ui, "combo_quality") else ""
     fps = ui.combo_fps.currentText() if hasattr(ui, "combo_fps") else ""
@@ -530,7 +537,9 @@ def snapshot_settings_from_ui(app: SteempegApp) -> RenderJobSettings:
         trim_end_ms = int(app.custom_timeline.trim_end_ms)
 
     size_slider_index = 0
-    if hasattr(ui, "size_slider") and ui.size_slider.isVisible():
+    if hasattr(ui, "size_slider") and (
+        ui.size_slider.isVisible() or (read_hidden_slider and "Target File Size" in quality)
+    ):
         size_slider_index = ui.size_slider.value()
 
     custom_fps = None

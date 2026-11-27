@@ -6964,7 +6964,10 @@ class LibraryMixin:
         )
         worker.start()
     
-    def get_clip_size_and_duration(self, clip_path, mpd_content, *, measure_size: bool = True):
+    def get_clip_size_and_duration(
+        self, clip_path, mpd_content, *, measure_size: bool = True,
+        update_playback_duration: bool = True,
+    ):
         # Duration from XML is cheap; full folder walks block clip-open on long recordings.
         if measure_size:
             size_mb = discovery.folder_size_bytes(clip_path) / (1024 * 1024)
@@ -6975,16 +6978,16 @@ class LibraryMixin:
         # duration: the parsing lives in mpd.py now, the display formatting stays here
         seconds = mpd.parse_duration_seconds(mpd_content)
         if seconds is None:
-            self.current_clip_duration_sec = 0.0   # reset so no old time stays from the last clip
             duration_str = "Unknown"
         else:
-            self.current_clip_duration_sec = seconds
             # show H:MM:SS when it is over an hour, otherwise just MM:SS
             total = int(seconds)
             h, m, s = total // 3600, (total % 3600) // 60, total % 60
             duration_str = f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
-        self.current_clip_duration_str = duration_str
+        if update_playback_duration:
+            self.current_clip_duration_sec = seconds if seconds is not None else 0.0
+            self.current_clip_duration_str = duration_str
         return size_str, duration_str
 
     def _schedule_clip_folder_size_label(self, clip_path: str) -> None:
@@ -7025,7 +7028,7 @@ class LibraryMixin:
             if hasattr(self, "_norm_clip_path_key")
             else os.path.normpath(clip_path)
         )
-        active = getattr(self, "_preview_clip_path", None) or getattr(
+        active = self._render_settings_clip_path() or getattr(
             self, "_last_export_clip_path", None
         )
         active_key = (

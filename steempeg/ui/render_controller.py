@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import time
+from datetime import timedelta
 
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
 from PySide6.QtGui import QFontMetrics, QPixmap
@@ -296,6 +297,10 @@ class RenderMixin:
         folder = QFileDialog.getExistingDirectory(
             self.ui, "Select Destination Folder", start
         )
+        if self._desktop_queue_settings_job() is not None:
+            if folder:
+                apply_export_folder(self, folder, persist=False)
+            return
         if folder:
             folder = normalize_export_folder(folder)
             apply_export_folder(self, folder, persist=True)
@@ -1712,8 +1717,9 @@ class RenderMixin:
                 return job.clip_path
         return None
 
-    def _active_preview_clip_path(self):
-        return self._current_preview_clip_path()
+    def _render_settings_clip_path(self):
+        job = self._desktop_queue_settings_job()
+        return job.clip_path if job is not None else self._current_preview_clip_path()
 
     def _is_export_clip_path(self, path: str | None) -> bool:
         if not path or not os.path.isdir(path):
@@ -1872,6 +1878,7 @@ class RenderMixin:
         Any other library card → play it and bind header/dash to that clip
         (Preview diversion) until Leave, Resume, or a queue card is chosen.
         """
+        self._close_desktop_queue_settings()
         self._flush_current_trim_state()
         clip_path = os.path.normpath(clip_path)
         if hasattr(self, "_is_valid_clip_path") and not self._is_valid_clip_path(clip_path):
@@ -2360,6 +2367,12 @@ class RenderMixin:
         btn.setEnabled(self._queue_is_active() or not previewing_export)
         open_dlg = getattr(self, "_desktop_render_settings_dlg", None)
         try:
+            if open_dlg is not None:
+                job = self._status_strip_context_job()
+                target_id = job.id if job is not None else None
+                if open_dlg.queue_job_id != target_id:
+                    open_dlg.close_and_return()
+                    return
             is_open = open_dlg is not None and open_dlg.isVisible() and not open_dlg.isMinimized()
         except RuntimeError:
             is_open = False
@@ -3229,6 +3242,112 @@ class RenderMixin:
 
         toggle_desktop_render_settings(self)
 
+    def _desktop_queue_settings_job(self):
+        return getattr(self, "_desktop_queue_settings_target", None)
+
+    def _close_desktop_queue_settings(self) -> None:
+        if self._desktop_queue_settings_job() is not None:
+            dlg = getattr(self, "_desktop_render_settings_dlg", None)
+            if dlg is not None:
+                dlg.close_and_return()
+
+    def _begin_desktop_queue_settings(self, job) -> None:
+        from steempeg.render.target_size import clip_duration_and_height
+
+        self._prepare_pending_render_settings()
+        destination = getattr(self, "custom_destination", None)
+        self._desktop_queue_settings_backup = (
+            self._current_preview_clip_path(),
+            snapshot_settings_from_ui(self, read_hidden_slider=True),
+            destination,
+        )
+        self._desktop_queue_settings_duration, _ = clip_duration_and_height(job)
+        self._desktop_queue_settings_target = job
+        self._desktop_queue_settings_baseline = None
+        self.custom_destination = None
+        self._load_desktop_render_form(job.clip_path, job.settings)
+        self._desktop_queue_settings_baseline = snapshot_settings_from_ui(
+            self, read_hidden_slider=True,
+        )
+
+    def _end_desktop_queue_settings(self) -> None:
+        job = self._desktop_queue_settings_job()
+        if job is None:
+            return
+        self._save_desktop_queue_settings()
+        timer = getattr(self, "_filename_setup_timer", None)
+        if timer is not None:
+            timer.stop()
+        path, settings, destination = self._desktop_queue_settings_backup
+        if self._queue_job_for_preview_sync(path) is job:
+            settings = job.settings
+            destination = settings.save_dir or destination
+        self._desktop_queue_settings_target = None
+        self._desktop_queue_settings_baseline = None
+        self._desktop_queue_settings_backup = None
+        try:
+            self._load_desktop_render_form(path, settings)
+        finally:
+            self.custom_destination = destination
+        if self._pending_render_settings() is not None:
+            QTimer.singleShot(0, self._prepare_pending_render_settings)
+
+    def _load_desktop_render_form(self, path, settings) -> None:
+        previous_bulk = getattr(self, "_bulk_settings_apply", False)
+        self._bulk_settings_apply = True
+        self._audio_probe_gen = getattr(self, "_audio_probe_gen", 0) + 1
+        self._clip_size_label_gen = getattr(self, "_clip_size_label_gen", 0) + 1
+        try:
+            if path and not self._is_rendered_export_path(path):
+                self._populate_quality_options_for_clip(path, settings_only=True)
+            else:
+                self.current_source_raw_paths = ""
+                self.current_orig_height = 0
+                self._current_clip_has_audio = True
+                for name, text in (
+                    ("source_label", "Source: -"),
+                    ("orig_res_label", "Original resolution: -"),
+                    ("label_duration", "Time: -"),
+                    ("label_size", "Size: -"),
+                    ("label_fps", "FPS: -"),
+                    ("label_vbitrate", "Video Bitrate: -"),
+                    ("label_abitrate", "Audio Bitrate: -"),
+                ):
+                    widget = getattr(self.ui, name, None)
+                    if widget is not None:
+                        widget.setText(text)
+            apply_job_settings_to_ui(
+                self, settings, refresh_summary=False, restore_exact_encoder=True,
+            )
+        finally:
+            self._bulk_settings_apply = previous_bulk
+
+    def _save_desktop_queue_settings(self) -> bool:
+        from dataclasses import fields, replace
+
+        job = self._desktop_queue_settings_job()
+        baseline = self._desktop_queue_settings_baseline
+        if (
+            baseline is None
+            or self.render_queue.get(job.id) is not job
+            or job.status not in (JobStatus.QUEUED, JobStatus.ERROR)
+        ):
+            return False
+        live = snapshot_settings_from_ui(self, read_hidden_slider=True)
+        edits = {
+            field.name: getattr(live, field.name)
+            for field in fields(live)
+            if getattr(live, field.name) != getattr(baseline, field.name)
+            and field.name not in ("is_trim_mode", "trim_start_ms", "trim_end_ms")
+        }
+        if not edits:
+            return False
+        job.settings = replace(job.settings, **edits)
+        job.refresh_output_path()
+        self._desktop_queue_settings_baseline = live
+        self._persist_render_queue()
+        return True
+
     def _apply_desktop_dash_render_icons(self) -> None:
         """White glyphs on desktop Start / Pause / Cancel (portable keeps emoji labels)."""
         if getattr(self, "_portable_shell", False):
@@ -3326,6 +3445,15 @@ class RenderMixin:
             state["zoom_level"] = float(getattr(tl, "zoom_level", 1.0))
             bar = tl.horizontalScrollBar()
             state["scroll_x"] = int(bar.value()) if bar is not None else 0
+        backup = getattr(self, "_desktop_queue_settings_backup", None)
+        if backup is not None:
+            settings = backup[1]
+            state.update(
+                container=settings.container_format, codec_text=settings.codec_text,
+                audio_format=settings.audio_format, output_preset=settings.output_preset,
+                audio_only=settings.audio_only, mute_audio=settings.mute_audio,
+            )
+            return state
         ui = self.ui
         if hasattr(ui, "combo_container"):
             state["container"] = ui.combo_container.currentText()
@@ -3346,9 +3474,10 @@ class RenderMixin:
         memory = getattr(self, "_clip_session_memory", None) or {}
         if clip_path in memory:
             return dict(memory[clip_path])
-        job = self._resolve_queue_job_for_library_clip(clip_path)
-        if job:
-            return self._session_state_from_job_settings(job)
+        if self._queue_is_active():
+            job = self._resolve_queue_job_for_library_clip(clip_path)
+            if job:
+                return self._session_state_from_job_settings(job)
         return dict(_DEFAULT_CLIP_SESSION)
 
     def _session_state_from_job_settings(self, job) -> dict:
@@ -3474,9 +3603,12 @@ class RenderMixin:
                 float(state.get("zoom_level", 1.0)),
                 int(state.get("scroll_x", 0)),
             )
-        self._apply_export_session_state(state, silent=silent)
+        if self._desktop_queue_settings_job() is None:
+            self._apply_export_session_state(state, silent=silent)
 
     def _flush_clip_session_state(self) -> None:
+        if getattr(self, "_loading_queue_job", False):
+            return
         clip_path = getattr(self, "_preview_clip_path", None)
         if not clip_path:
             return
@@ -3533,6 +3665,8 @@ class RenderMixin:
 
     def _sync_active_queue_job_from_ui(self) -> bool:
         """Push live export/trim UI into the queued job for the clip being previewed."""
+        if self._desktop_queue_settings_job() is not None:
+            return self._save_desktop_queue_settings()
         if getattr(self, "_loading_queue_job", False):
             return False
         preview = self._current_preview_clip_path()
@@ -3549,7 +3683,7 @@ class RenderMixin:
         self._sync_active_queue_job_from_ui()
 
     def _populate_quality_options_for_clip(
-        self, clip_path: str, *, preserve_ui_selection: bool = False,
+        self, clip_path: str, *, preserve_ui_selection: bool = False, settings_only: bool = False,
     ) -> None:
         """Fill render settings combos from clip metadata (no preview/header)."""
         clip_path = os.path.normpath(clip_path)
@@ -3563,16 +3697,17 @@ class RenderMixin:
 
         clip_folder_name = os.path.basename(clip_path)
         parts = clip_folder_name.split("_")
-        if len(parts) >= 2 and parts[1].isdigit():
-            self.current_game_icon = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
-        else:
-            self.current_game_icon = ""
+        if not settings_only:
+            if len(parts) >= 2 and parts[1].isdigit():
+                self.current_game_icon = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
+            else:
+                self.current_game_icon = ""
 
         if hasattr(self.ui, "input_filename"):
             self.ui.input_filename.setText(f"{clip_folder_name}_rendered")
 
         all_mpds = self.get_all_mpd_paths(clip_path)
-        if hasattr(self, "update_clip_open_loading_progress"):
+        if not settings_only and hasattr(self, "update_clip_open_loading_progress"):
             self.update_clip_open_loading_progress(18)
         if not all_mpds:
             self.ui.source_label.setText("Source: No MPD files found")
@@ -3588,7 +3723,7 @@ class RenderMixin:
         # (and some Steam recordings) have video only; without this the audio format/
         # bitrate combos would offer choices for a track that doesn't exist.
         self._current_clip_has_audio = self._detect_clip_has_audio(all_mpds)
-        if hasattr(self, "update_clip_open_loading_progress"):
+        if not settings_only and hasattr(self, "update_clip_open_loading_progress"):
             self.update_clip_open_loading_progress(28)
 
         source_dirs = [os.path.dirname(m) for m in all_mpds]
@@ -3611,7 +3746,8 @@ class RenderMixin:
                     clip_full_path = os.path.dirname(mpd_path)
                     # Duration from XML only — folder_size walk deferred (thousands of chunks).
                     size_str, duration_str = self.get_clip_size_and_duration(
-                        clip_full_path, content, measure_size=False
+                        clip_full_path, content, measure_size=False,
+                        update_playback_duration=not settings_only,
                     )
                     if hasattr(self.ui, "label_size"):
                         self.ui.label_size.setText(f"Size: {size_str}")
@@ -3619,7 +3755,7 @@ class RenderMixin:
                         self.ui.label_duration.setText(f"Time: {duration_str}")
                     # Keep SteempegUI header meta in sync once duration is known.
                     meta = getattr(self, "_player_header_meta", None)
-                    if meta is not None and not meta.get("placeholder"):
+                    if not settings_only and meta is not None and not meta.get("placeholder"):
                         from steempeg.ui.player_header_layout import (
                             refresh_player_header_text,
                             store_player_header_meta,
@@ -3670,10 +3806,10 @@ class RenderMixin:
             self._schedule_clip_folder_size_label(clip_path)
 
         self._rebuild_audio_bitrate_combo()
-        if all_mpds:
+        if all_mpds and not settings_only:
             self._schedule_real_audio_bitrate(all_mpds[0])
 
-        if hasattr(self, "update_clip_open_loading_progress"):
+        if not settings_only and hasattr(self, "update_clip_open_loading_progress"):
             self.update_clip_open_loading_progress(40)
 
         if unique_resolutions:
@@ -3736,14 +3872,13 @@ class RenderMixin:
             if index >= 0:
                 self.ui.combo_bitrate.setCurrentIndex(index)
 
-        if not getattr(self, "_is_rendering", False):
+        if not settings_only:
             self.ui.btn_start.setEnabled(True)
-        self.ui.btn_start.setEnabled(True)
-        self.update_final_setup()
+            self.update_final_setup()
         # Enforce audio-track availability (disables audio choices for video-only clips).
         self._sync_original_audio_controls()
         self.refresh_output_format_availability()
-        if hasattr(self, "refresh_player_header_info"):
+        if not settings_only and hasattr(self, "refresh_player_header_info"):
             self.refresh_player_header_info(has_clip=True)
 
     def _quality_combo_item_meta(self, index: int = -1) -> dict:
@@ -4169,6 +4304,9 @@ class RenderMixin:
     ) -> None:
         if gen != getattr(self, "_clips_quality_gen", 0):
             return
+        if self._desktop_queue_settings_job() is not None:
+            self._deferred_quality_populate = (gen, clip_path, session, preserve_ui_selection)
+            return
         want = (
             self._norm_clip_path_key(clip_path)
             if hasattr(self, "_norm_clip_path_key")
@@ -4188,8 +4326,8 @@ class RenderMixin:
         if session is not None:
             # Export/settings only — trim/markers restore after duration is known.
             self._apply_export_session_state(session, silent=True)
-        if not preserve_ui_selection and hasattr(self, "_resolve_queue_job_for_library_clip"):
-            job = self._resolve_queue_job_for_library_clip(clip_path)
+        if not preserve_ui_selection:
+            job = self._queue_job_for_preview_sync(clip_path)
             if job is not None:
                 from steempeg.ui.render_job_builder import apply_job_settings_to_ui
 
@@ -4233,6 +4371,8 @@ class RenderMixin:
         )
 
     def _prepare_pending_render_settings(self) -> None:
+        if self._desktop_queue_settings_job() is not None:
+            return
         pending = self._pending_render_settings()
         if pending is None:
             return
@@ -4270,7 +4410,7 @@ class RenderMixin:
         mbps = float(getattr(self, "current_orig_bitrate", 0) or 0)
         if mbps > 0:
             return mbps
-        clip_path = self._active_preview_clip_path()
+        clip_path = self._render_settings_clip_path()
         if not clip_path:
             return 0.0
         peak = 0.0
@@ -4521,9 +4661,17 @@ class RenderMixin:
         return f"~{size_mb:.1f} MB"
 
     def _format_trim_duration_str(self) -> str:
-        if hasattr(self, "custom_timeline") and self.custom_timeline.is_trim_mode:
-            start_s = self.custom_timeline.trim_start_ms / 1000.0
-            end_s = self.custom_timeline.trim_end_ms / 1000.0
+        job = self._desktop_queue_settings_job()
+        trim = self._capture_trim_state()
+        if job is not None:
+            trim = {
+                "is_trim_mode": job.settings.is_trim_mode,
+                "trim_start_ms": job.settings.trim_start_ms,
+                "trim_end_ms": job.settings.trim_end_ms,
+            }
+        if trim["is_trim_mode"]:
+            start_s = trim["trim_start_ms"] / 1000.0
+            end_s = trim["trim_end_ms"] / 1000.0
             s_h = int(start_s // 3600)
             s_m = int((start_s % 3600) // 60)
             s_s = int(start_s % 60)
@@ -4536,7 +4684,16 @@ class RenderMixin:
                     f"{e_h:02d}:{e_m:02d}:{e_s:02d}"
                 )
             return f"✂️ {s_m:02d}:{s_s:02d} - {e_m:02d}:{e_s:02d}"
+        if job is not None:
+            return job.duration_label or str(
+                timedelta(seconds=int(self._desktop_queue_settings_duration))
+            )
         return getattr(self, "current_clip_duration_str", "Unknown")
+
+    def _render_settings_duration(self) -> float:
+        if self._desktop_queue_settings_job() is not None:
+            return self._desktop_queue_settings_duration
+        return self.get_effective_duration()
 
     def _schedule_update_final_setup(self, delay_ms: int = 180) -> None:
         """Debounce heavy export summary/path work while typing the output filename."""
@@ -4581,14 +4738,17 @@ class RenderMixin:
         """Dynamically updates the Detailed Summary, Size, and Save Path."""
         if getattr(self, "_bulk_settings_apply", False) and not trim_only:
             return
+        editor_job = self._desktop_queue_settings_job()
+        if trim_only and editor_job is not None:
+            return
         if not trim_only:
             self._revalidate_active_custom_preset()
             state = getattr(self, "_preset_row_apply_state", None)
             if state is not None:
                 state.revalidate()
-        clip_path = self._active_preview_clip_path()
+        clip_path = self._render_settings_clip_path()
         # Queue encode stamps preview path without opening media — treat as idle.
-        if not clip_path or not self._player_has_open_clip():
+        if editor_job is None and (not clip_path or not self._player_has_open_clip()):
             self._sync_queue_player_and_dash_chrome()
             if hasattr(self.ui, 'label_detailed_summary'):
                 self.ui.label_detailed_summary.setText("Waiting for clip selection...")
@@ -4663,7 +4823,7 @@ class RenderMixin:
                 self.btn_copy_loc.show()
 
         # 4. Collecting texts & Smart Math
-        duration = self.get_effective_duration() # Use trimmed duration for math!
+        duration = self._render_settings_duration()
         
         # Format the beautiful "Clip time: ✂️ 00:10 - 01:50" string
         duration_str = self._format_trim_duration_str()
@@ -4859,7 +5019,7 @@ class RenderMixin:
             if resolved:
                 target_icon = resolved
         else:
-            preview_path = self._active_preview_clip_path()
+            preview_path = self._current_preview_clip_path()
             if preview_path and hasattr(self.ui, "table_clips"):
                 for row in range(self.ui.table_clips.rowCount()):
                     item = self.ui.table_clips.item(row, 0)
@@ -4938,7 +5098,7 @@ class RenderMixin:
                 self._set_player_header_game_icon(icon_path=target_icon)
 
             # CONNECTING THE MAIN BOSS: Updating the CENTRAL plug!
-            if hasattr(self, 'place_logo') and hasattr(self, 'place_text'):
+            if editor_job is None and hasattr(self, 'place_logo') and hasattr(self, 'place_text'):
                 from steempeg.ui.icon_shape import shaped_game_icon_pixmap
                 from steempeg.ui.icon_utils import apply_square_icon
 
@@ -5077,7 +5237,7 @@ class RenderMixin:
             target_mb = int(text)
 
             # --- Use EFFECTIVE duration for correct calculation! ---
-            duration = self.get_effective_duration()
+            duration = self._render_settings_duration()
             orig_bitrate = getattr(self, 'current_orig_bitrate', 10)
             orig_mb = int((orig_bitrate * duration) / 8)
             if orig_mb < 1: orig_mb = 1
@@ -5106,8 +5266,8 @@ class RenderMixin:
     
     def setup_dynamic_slider(self):
         """ Generates strict slider steps and adds Lossless & Custom modes """
-        duration = float(self.get_effective_duration() or 0)
-        if duration <= 0:
+        duration = float(self._render_settings_duration() or 0)
+        if duration <= 0 and self._desktop_queue_settings_job() is None:
             duration = float(getattr(self, "current_clip_duration_sec", 0) or 0)
         if duration <= 0:
             # Still no duration — don't leave the Designer "Target Size" stub,
@@ -5157,8 +5317,8 @@ class RenderMixin:
             requested_mb = 0
         # Lossless means "this clip's own size", so the megabyte number is not reused.
         self.custom_target_mb = 0 if is_lossless else max(0, requested_mb)
-        duration = float(self.get_effective_duration() or 0)
-        if duration <= 0:
+        duration = float(self._render_settings_duration() or 0)
+        if duration <= 0 and self._desktop_queue_settings_job() is None:
             duration = float(getattr(self, "current_clip_duration_sec", 0) or 0)
         if duration <= 0:
             if hasattr(self.ui, "label_target_size"):
@@ -5320,6 +5480,7 @@ class RenderMixin:
         thread, then card rebuild + queue JSON on the next tick so Portable Add
         does not freeze the sheet.
         """
+        self._close_desktop_queue_settings()
         if self._is_rendered_export_path(clip_path):
             logging.warning("Refused to queue rendered export: %s", clip_path)
             if sync_ui:
@@ -5848,6 +6009,8 @@ class RenderMixin:
             label.setText(text or "")
 
     def _persist_render_settings_quiet(self) -> None:
+        if self._desktop_queue_settings_job() is not None:
+            return
         try:
             from steempeg.ui.portable.sheets import persist_render_settings
 
@@ -6304,6 +6467,7 @@ class RenderMixin:
         from steempeg.ui.preset_compat import preset_settings_for_plan
 
         settings = preset_settings_for_plan(self, settings, preset_name)
+        self._close_desktop_queue_settings()
         apply_preset_to_job(job, settings, preset_name=preset_name)
         if job_id == getattr(self, "_selected_queue_job_id", None):
             from steempeg.ui.render_job_builder import apply_job_settings_to_ui
@@ -6343,15 +6507,20 @@ class RenderMixin:
         job = self.render_queue.get(job_id)
         if not job:
             return
+        self._close_desktop_queue_settings()
+        # Save the old form before switching job IDs, even if both use the same clip.
+        self._flush_clip_session_state()
+        if self._pending_render_settings() is None and self._sync_active_queue_job_from_ui():
+            self._persist_render_queue()
         if getattr(self, "_queue_scheme_deferred", False):
             # Clicking a queued card re-enters the scheme with this job.
             self._queue_scheme_deferred = False
             self._queue_resume_job_id = None
         self._queue_library_preview_diversion = False
-        # Persist the *previous* selection before the loading gate blocks sync.
-        self._flush_clip_session_state()
-        if self._sync_active_queue_job_from_ui():
-            self._persist_render_queue()
+        # Queue settings are loaded synchronously below. Discard deferred library work.
+        self._clips_quality_gen = getattr(self, "_clips_quality_gen", 0) + 1
+        self._pending_quality_populate = None
+        self._deferred_quality_populate = None
         self._loading_queue_job = True
         try:
             self._selected_queue_job_id = job_id
@@ -6911,11 +7080,19 @@ class RenderMixin:
         return jobs[0]
 
     def _queue_job_for_preview_sync(self, clip_path: str | None = None):
-        """Resolve the queue job that should receive live trim/settings edits."""
-        preview = clip_path or self._current_preview_clip_path()
-        if not preview or not hasattr(self, "render_queue"):
+        """Only a queue job explicitly bound to the live form can receive edits."""
+        job_id = getattr(self, "_selected_queue_job_id", None)
+        if not job_id or not self._queue_is_active() or self._is_previewing_rendered_media():
             return None
-        return self._resolve_queue_job_for_library_clip(preview)
+        preview = clip_path or self._current_preview_clip_path()
+        job = self.render_queue.get(job_id)
+        if (
+            job is not None
+            and preview
+            and os.path.normpath(job.clip_path) == os.path.normpath(preview)
+        ):
+            return job
+        return None
 
     def _in_queue_membership_indices(self, clip_path) -> list:
         """1-based ``queue_index`` values for every job of this clip (ClipCard order)."""
