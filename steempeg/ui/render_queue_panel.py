@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from steempeg.infra import paths
 from steempeg.infra.paths import get_save_directory
 from steempeg.ui.icon_assets import load_icon
-from steempeg.ui.pro_appearance import render_status_color
+from steempeg.ui.pro_appearance import render_status_color, set_accent_stylesheet
 from steempeg.render.queue import JobStatus, RenderJob
 from steempeg.render.queue_display import (
     format_job_datetime_line,
@@ -169,7 +169,8 @@ class _QueueAddPeekGhost(QFrame):
             )
             start_card_peek_pulse(self)
             return
-        self.setStyleSheet(
+        set_accent_stylesheet(
+            self,
             f"""
             QFrame#queueAddPeekGhost {{
                 background-color: rgba(178, 154, 231, 0.14);
@@ -193,7 +194,7 @@ class _QueueAddPeekGhost(QFrame):
             name = ElidedLabel(title)
             name.setStyleSheet(f"color: #f0f0f0; font-weight: bold; font-size: 12px; {_FONT}")
             sub = QLabel(hint)
-            sub.setStyleSheet(f"color: #b29ae7; font-size: 11px; {_FONT}")
+            set_accent_stylesheet(sub, f"color: #b29ae7; font-size: 11px; {_FONT}")
             lay.addWidget(plus, 0, Qt.AlignmentFlag.AlignLeft)
             lay.addWidget(name)
             lay.addWidget(sub)
@@ -207,7 +208,8 @@ class _QueueAddPeekGhost(QFrame):
             thumb = QLabel()
             thumb.setFixedSize(int(thumb_w), int(thumb_h))
             thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            thumb.setStyleSheet(
+            set_accent_stylesheet(
+                thumb,
                 "background-color: #1a1a1a; border: none; border-radius: 8px;"
                 f" color: #b29ae7; font-size: 22px; font-weight: bold; {_FONT}"
             )
@@ -242,7 +244,7 @@ class _QueueAddPeekGhost(QFrame):
             )
             name.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             sub = QLabel(hint)
-            sub.setStyleSheet(f"color: #b29ae7; font-size: 11px; {_FONT}")
+            set_accent_stylesheet(sub, f"color: #b29ae7; font-size: 11px; {_FONT}")
             sub.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             col.addWidget(name)
             col.addWidget(sub)
@@ -304,14 +306,15 @@ class _QueueAddPeekGhost(QFrame):
 
         self._ring = QFrame(self)
         self._ring.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self._ring.setStyleSheet(
+        set_accent_stylesheet(
+            self._ring,
             f"QFrame {{ background-color: rgba(178, 154, 231, 0.10);"
             f" border: {QUEUE_CARD_BORDER_PX}px dashed #b29ae7; {radii} }}"
         )
         self._badge = QLabel("+ Would be added", self)
         self._badge.setObjectName("queueAddPeekBadge")
         self._badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self._badge.setStyleSheet(_PEEK_BADGE_STYLE)
+        set_accent_stylesheet(self._badge, _PEEK_BADGE_STYLE)
         self._badge.setFixedHeight(22)
         self._badge.adjustSize()
         self._place_overlays()
