@@ -8,7 +8,7 @@ import time
 from copy import deepcopy
 
 from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, QSize, QTimer
-from PySide6.QtGui import QColor, QIcon, QPixmap
+from PySide6.QtGui import QColor, QFontInfo, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -495,6 +495,16 @@ class SettingsDialog(SteempegDialog):
         if not theme_kwargs.get("bar_color"):
             theme_kwargs = {**dialog_theme(parent_w), **theme_kwargs}
         super().__init__("Settings", parent_w, **theme_kwargs)
+        if sys.platform.startswith("linux") and QApplication.platformName() == "xcb":
+            # X11 does not publish WM_TRANSIENT_FOR for the normal window type.
+            # A utility stays above its owner without GNOME attaching it like a dialog.
+            self._dialog_window_flags = (
+                self._dialog_window_flags & ~Qt.WindowType.WindowType_Mask
+            ) | Qt.WindowType.Tool
+            self.setWindowFlags(self._dialog_window_flags)
+        self._owner_focus_timer = QTimer(self)
+        self._owner_focus_timer.setSingleShot(True)
+        self._owner_focus_timer.timeout.connect(self._restore_modal_focus)
         self._app = app
         self._combo_popups_mapped = False
         self._settings_layout = settings_layouts.normalize_settings_layout(settings_layout)
@@ -536,6 +546,35 @@ class SettingsDialog(SteempegDialog):
         # the explicit cursors that will be needed when the form opens again.
         self.reset_title_bar_chrome()
 
+    def exec(self):
+        owner = self.parentWidget()
+        if not sys.platform.startswith("linux") or owner is None:
+            return super().exec()
+        owner = owner.window()
+        owner.installEventFilter(self)
+        try:
+            return super().exec()
+        finally:
+            self._owner_focus_timer.stop()
+            owner.removeEventFilter(self)
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        if event.type() == QEvent.Type.WindowActivate:
+            self._owner_focus_timer.start(0)
+        elif (event.type() == QEvent.Type.WindowStateChange
+              and event.oldState() & Qt.WindowState.WindowMinimized
+              and not watched.isMinimized()):
+            self._owner_focus_timer.start(0)
+        return super().eventFilter(watched, event)
+
+    def _restore_modal_focus(self) -> None:
+        owner = self.parentWidget()
+        if (QApplication.activeModalWidget() is self and self.isVisible()
+                and owner is not None and owner.window().isVisible()
+                and not owner.window().isMinimized()):
+            self.raise_()
+            self.activateWindow()
+
     def refresh_before_opening(self) -> None:
         """Refresh values sourced from live state rather than saved preferences."""
         with QSignalBlocker(self._chk_autostart):
@@ -549,6 +588,7 @@ class SettingsDialog(SteempegDialog):
             self._refresh_kofi_links()
         self._load_pane_spins(settings)
         self._refit_pane_percent_spins(seed_hover_queue=True, remember_baseline=True)
+        self._refresh_ui_font_status()
         self._reset_apply_baseline()
 
     def _build_form(self, settings):
@@ -893,6 +933,7 @@ class SettingsDialog(SteempegDialog):
 
         # Linux-only: Windows stays classic Segoe with no UI font setting.
         self._combo_ui_font = None
+        self._ui_font_status = None
         self._committed_ui_font = UI_FONT_DEFAULT
         if ui_font_preference_supported():
             font_row = QHBoxLayout()
@@ -909,15 +950,9 @@ class SettingsDialog(SteempegDialog):
             font_row.addWidget(font_lbl)
             font_row.addWidget(self._combo_ui_font, 1)
             v.addLayout(font_row)
-            from PySide6.QtGui import QFontInfo
-
-            actual_family = QFontInfo(QApplication.font()).family()
-            segoe_status = "installed" if tok.segoe_ui_available() else "not installed"
-            v.addWidget(self._hint(
-                f"Active font: {actual_family}. Segoe UI: {segoe_status}. "
-                "Segoe UI is supplied by the user; it is not bundled. "
-                "Auto uses installed Segoe UI, otherwise bundled Selawik."
-            ))
+            self._ui_font_status = self._hint("")
+            v.addWidget(self._ui_font_status)
+            self._refresh_ui_font_status()
 
 
         yield
@@ -3042,10 +3077,22 @@ class SettingsDialog(SteempegDialog):
         logging.info("UI theme cancelled → restored %s", committed)
         self._refresh_ui_theme(committed)
 
+    def _refresh_ui_font_status(self) -> None:
+        if self._ui_font_status is not None:
+            active = QFontInfo(QApplication.font()).family()
+            segoe = tok.available_segoe_ui_family()
+            if segoe:
+                status = f"Detected: {segoe}."
+            else:
+                status = ("Segoe UI unavailable. Auto uses bundled Selawik. "
+                          "To use Segoe UI, install it in Linux and restart Steempeg.")
+            self._ui_font_status.set_help_text(f"Active font: {active}. {status}")
+
     def _refresh_ui_font(self, pref: str) -> None:
         if not ui_font_preference_supported():
             return
         apply_ui_font_preference(pref, app=QApplication.instance())
+        self._refresh_ui_font_status()
         live = normalize_ui_theme(get_ui_theme())
         self._refresh_ui_theme(live)
 

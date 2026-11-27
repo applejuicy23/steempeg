@@ -142,50 +142,14 @@ def normalize_ui_font(value: object | None) -> str:
     return aliases.get(raw, UI_FONT_DEFAULT)
 
 
-def _file_looks_like_segoe(path: str) -> bool:
-    name = Path(path).name.lower()
-    return "segoe" in name or name.startswith("segui")
+def available_segoe_ui_family() -> str | None:
+    """Find the installed Segoe face by its family name as seen by Qt."""
+    from PySide6.QtGui import QFontDatabase, QGuiApplication
 
-
-def segoe_ui_available() -> bool:
-    """True when a real Segoe UI font file exists (not a fontconfig alias)."""
-    if not ui_font_preference_supported():
-        try:
-            from PySide6.QtGui import QFontDatabase
-
-            return FAMILY_SEGOE in QFontDatabase.families()
-        except Exception:
-            return True
-    try:
-        import subprocess
-
-        proc = subprocess.run(
-            ["fc-match", "-f", "%{file}", "Segoe UI"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-        path = (proc.stdout or "").strip()
-        if path and _file_looks_like_segoe(path):
-            return True
-    except Exception:
-        pass
-    search_roots = (
-        Path("/usr/share/fonts"),
-        Path("/usr/local/share/fonts"),
-        Path.home() / ".local" / "share" / "fonts",
-        Path.home() / ".fonts",
-    )
-    try:
-        for root in search_roots:
-            if not root.is_dir():
-                continue
-            for p in root.rglob("*"):
-                if p.is_file() and _file_looks_like_segoe(str(p)):
-                    return True
-    except Exception:
-        pass
-    return False
+    if QGuiApplication.instance() is None:
+        return None
+    families = {family.casefold(): family for family in QFontDatabase.families()}
+    return families.get(FAMILY_SEGOE.casefold()) or families.get("segoe ui variable")
 
 
 def register_bundled_selawik_fonts() -> str:
@@ -276,7 +240,7 @@ def _rebuild_font_css() -> None:
 
 def _system_ui_family() -> str:
     """Linux system sans — visibly different from Selawik / phantom Segoe aliases."""
-    blocked = {"segoe ui", "selawik"}
+    blocked = {"segoe ui", "segoe ui variable", "selawik"}
     try:
         from PySide6.QtGui import QFont, QFontDatabase
 
@@ -303,26 +267,21 @@ def _system_ui_family() -> str:
 def resolve_ui_font_families(pref: str | None = None) -> tuple[str, ...]:
     """Latin + emoji stack for the given preference (does not mutate globals).
 
-    Linux only. Auto = real Segoe if files exist, else Selawik. Selawik forces
+    Linux only. Auto = Segoe when Qt sees it, else Selawik. Selawik forces
     Selawik. System uses the desktop sans (Adwaita/Noto/…) — visibly different.
     """
     if not ui_font_preference_supported():
         return (FAMILY_SEGOE, *_TAIL_FAMILIES)
     choice = normalize_ui_font(pref)
-    tail = _TAIL_FAMILIES
-    segoe = segoe_ui_available()
     if choice == UI_FONT_SYSTEM:
         # Real system face first — never emoji-only (QSS would paint Twemoji as UI).
-        return (_system_ui_family(), *tail)
-    if choice == UI_FONT_SEGOE:
-        # Prefer Segoe only when real files exist; otherwise Selawik (not a phantom alias).
-        primary = (FAMILY_SEGOE, FAMILY_SELAWIK) if segoe else (FAMILY_SELAWIK, FAMILY_SEGOE)
-    elif choice == UI_FONT_SELAWIK:
-        primary = (FAMILY_SELAWIK, FAMILY_SEGOE)
-    else:
-        # Auto: real Segoe if present, else Selawik.
-        primary = (FAMILY_SEGOE, FAMILY_SELAWIK) if segoe else (FAMILY_SELAWIK, FAMILY_SEGOE)
-    return (*primary, *tail)
+        return (_system_ui_family(), *_TAIL_FAMILIES)
+    segoe = available_segoe_ui_family()
+    if segoe:
+        if choice == UI_FONT_SELAWIK:
+            return (FAMILY_SELAWIK, segoe, *_TAIL_FAMILIES)
+        return (segoe, FAMILY_SELAWIK, *_TAIL_FAMILIES)
+    return (FAMILY_SELAWIK, *_TAIL_FAMILIES)
 
 
 def peek_saved_ui_font() -> str:
