@@ -534,23 +534,27 @@ class SteempegDialog(QDialog):
         finally:
             # PointingHand on cards/buttons sticks after modal close until move.
             from PySide6.QtCore import QTimer
-            from PySide6.QtWidgets import QWidget
             from steempeg.ui.window_chrome import force_app_cursor_resync
 
-            try:
-                for w in self.findChildren(QWidget):
-                    try:
-                        if hasattr(w, "_set_hovered"):
-                            w._set_hovered(False)
-                        w.unsetCursor()
-                    except RuntimeError:
-                        pass
-                self.unsetCursor()
-            except RuntimeError:
-                pass
+            self._reset_modal_widget_cursors()
             force_app_cursor_resync()
             QTimer.singleShot(0, force_app_cursor_resync)
             QTimer.singleShot(50, force_app_cursor_resync)
+
+    def _reset_modal_widget_cursors(self) -> None:
+        from PySide6.QtWidgets import QWidget
+
+        try:
+            for w in self.findChildren(QWidget):
+                try:
+                    if hasattr(w, "_set_hovered"):
+                        w._set_hovered(False)
+                    w.unsetCursor()
+                except RuntimeError:
+                    pass
+            self.unsetCursor()
+        except RuntimeError:
+            pass
 
     def showEvent(self, event):
         if self._map_suppressed:
@@ -560,6 +564,9 @@ class SteempegDialog(QDialog):
         # Do NOT move/resize here — window is already becoming visible.
         super().showEvent(event)
         self.clearMask()
+        self._polish_combo_popups()
+
+    def _polish_combo_popups(self) -> None:
         # Combo popups are separate HWNDs; polish after children exist so Windows
         # light theme cannot force black list text onto our dark popup chrome.
         from PySide6.QtWidgets import QComboBox

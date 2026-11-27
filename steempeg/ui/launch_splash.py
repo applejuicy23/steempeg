@@ -15,6 +15,7 @@ import os
 import sys
 import time
 import webbrowser
+from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QTimer, QRectF, QUrl
 from PySide6.QtGui import (
@@ -783,7 +784,8 @@ def launch_splash_pump(*, force: bool = False) -> None:
 
 
 def hold_launch_splash_opening(
-    *, status: str = "Preparing workspace…", force: bool = False, hold_s: float = 1.0
+    *, status: str = "Preparing workspace…", force: bool = False, hold_s: float = 1.0,
+    prepare: Callable[[], None] | None = None,
 ) -> None:
     """100% + Preparing spin for ``hold_s``, then close the splash card.
 
@@ -792,8 +794,15 @@ def hold_launch_splash_opening(
     """
     global _splash
     if (_splash_disabled() and not force) or _splash is None:
+        if prepare is not None:
+            prepare()
         return
+    deadline = time.monotonic() + max(0.35, float(hold_s))
+    if prepare is not None:
+        prepare()
     try:
+        if _splash is None:
+            return
         _splash.mark_opening(status, hold_alive=True)
         _splash._spinner.set_fast(True)
         _splash.raise_()
@@ -801,9 +810,8 @@ def hold_launch_splash_opening(
         _splash._bar.snap_to(100.0, busy=True)
         _splash._sync_percent_label()
         _pump()
-        deadline = time.monotonic() + max(0.35, float(hold_s))
         frame_s = max(0.016, _SPINNER_INTERVAL_FAST_MS / 1000.0)
-        while time.monotonic() < deadline:
+        while _splash is not None and time.monotonic() < deadline:
             _splash._spinner.advance()
             _splash._bar.tick_once(allow_creep=False)
             _splash._sync_percent_label()

@@ -7053,10 +7053,37 @@ def main():
         window._sync_startup_layout()
         startup_trace("sync_startup_layout:end")
 
+        def _prepare_startup_dialogs():
+            from steempeg.ui.launch_splash import launch_splash_pump
+
+            last_pump = _startup_perf_counter()
+
+            def _pump_if_due():
+                nonlocal last_pump
+                if _startup_perf_counter() - last_pump >= 0.03:
+                    launch_splash_pump()
+                    last_pump = _startup_perf_counter()
+
+            try:
+                from steempeg.ui.settings_dialog import prepare_settings_at_startup
+
+                prepare_settings_at_startup(window, between_steps=_pump_if_due)
+            except Exception:
+                logging.exception("Settings startup warmup failed")
+            if not load_hide_kofi(settings):
+                try:
+                    from steempeg.ui.kofi_dialog import prepare_kofi_dialog
+
+                    prepare_kofi_dialog(window.ui)
+                except Exception:
+                    logging.exception("Ko-fi startup warmup failed")
+
         try:
             from steempeg.ui.launch_splash import hold_launch_splash_opening
 
-            hold_launch_splash_opening(status="Opening Steempeg…", hold_s=0.85)
+            hold_launch_splash_opening(
+                status="Opening Steempeg…", hold_s=0.85, prepare=_prepare_startup_dialogs,
+            )
         except Exception:
             logging.debug("Launch splash hold failed", exc_info=True)
 
@@ -7192,14 +7219,6 @@ def main():
             startup_trace("main_window_shown")
             window._startup_measurement.window_shown()
 
-            def _prepare_dialogs_when_idle():
-                from steempeg.ui.kofi_dialog import schedule_kofi_warmup
-                from steempeg.ui.settings_dialog import schedule_settings_warmup
-
-                schedule_settings_warmup(window)
-                schedule_kofi_warmup(window)
-
-            QTimer.singleShot(1000, _prepare_dialogs_when_idle)
             if not load_hide_kofi(settings):
                 try:
                     from steempeg.services.kofi_remote import refresh_kofi_url_async

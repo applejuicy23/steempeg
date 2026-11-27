@@ -496,6 +496,7 @@ class SettingsDialog(SteempegDialog):
             theme_kwargs = {**dialog_theme(parent_w), **theme_kwargs}
         super().__init__("Settings", parent_w, **theme_kwargs)
         self._app = app
+        self._combo_popups_mapped = False
         self._settings_layout = settings_layouts.normalize_settings_layout(settings_layout)
         if self._settings_layout == settings_layouts.SETTINGS_LAYOUT_TABS:
             self._design_w = _SETTINGS_DESIGN_W
@@ -507,6 +508,7 @@ class SettingsDialog(SteempegDialog):
         self._apply_settings_geometry()
 
         settings = prepared_settings if prepared_settings is not None else _load_settings(app)
+        self._settings_snapshot = settings if isinstance(settings, _SettingsSnapshot) else None
         self._form_builder = self._build_form(settings)
         if prepared_settings is None:
             self.finish_preparation()
@@ -524,17 +526,28 @@ class SettingsDialog(SteempegDialog):
         while not self.prepare_next_step():
             pass
 
+    def _polish_combo_popups(self) -> None:
+        if not self._combo_popups_mapped:
+            super()._polish_combo_popups()
+            self._combo_popups_mapped = True
+
+    def _reset_modal_widget_cursors(self) -> None:
+        # Qt sends Leave on hide. Reset our custom title hover without clearing
+        # the explicit cursors that will be needed when the form opens again.
+        self.reset_title_bar_chrome()
+
     def refresh_before_opening(self) -> None:
         """Refresh values sourced from live state rather than saved preferences."""
         with QSignalBlocker(self._chk_autostart):
             self._chk_autostart.setChecked(read_autostart_enabled())
-        hidden = load_hide_kofi(_load_settings(self._app))
+        settings = _load_settings(self._app)
+        hidden = load_hide_kofi(settings)
         if hidden != self._hide_kofi:
             self._hide_kofi = hidden
             self._sync_kofi_visibility()
         else:
             self._refresh_kofi_links()
-        self._seed_pane_spins_from_live()
+        self._load_pane_spins(settings)
         self._refit_pane_percent_spins(seed_hover_queue=True, remember_baseline=True)
         self._reset_apply_baseline()
 
@@ -716,7 +729,6 @@ class SettingsDialog(SteempegDialog):
         self._pane_percent_lock = False
         self._pane_percent_baseline = None
         saved_percents = read_shell_pane_percents(settings) or DEFAULT_SHELL_PANE_PERCENTS
-        self._pane_percent_loaded = tuple(int(v) for v in saved_percents)
         label_qss = (
             "color: #888888; font-weight: bold; font-size: 13px; "
             f"font-family: {tok.FONT_APP}; background: transparent;"
@@ -978,7 +990,7 @@ class SettingsDialog(SteempegDialog):
                 )
             )
             self._chk_queue_hover.toggled.connect(self._preview_queue_hover)
-        self._seed_pane_spins_from_live()
+        self._load_pane_spins(settings)
         self._refit_pane_percent_spins(seed_hover_queue=True, remember_baseline=True)
 
         self._chk_shell_tools_title = SteempegCheckBox(
@@ -2564,7 +2576,6 @@ class SettingsDialog(SteempegDialog):
             # general form baseline so returning to the opening percentages
             # after an Apply still writes and reapplies the requested widths.
             self._pane_percent_baseline = self._shell_pane_percent_values()
-            self._pane_percent_loaded = self._pane_percent_baseline
         self._applied_form_values = self._settings_form_values()
         self._update_apply_state()
 
@@ -2631,12 +2642,25 @@ class SettingsDialog(SteempegDialog):
         except (RuntimeError, TypeError, ValueError):
             return 0
 
-    def _seed_pane_spins_from_live(self) -> None:
-        """Fill the percent fields from the panes on screen.
+    def _load_pane_spins(self, settings: dict) -> None:
+        """Show saved shares, using live widths only before any share was saved."""
+        values = read_shell_pane_percents(settings)
+        if values is None:
+            self._seed_pane_spins_from_live()
+            return
 
-        The saved share can say 25% while Clips is stretched across the
-        window. The fields should show that stretch, not the old number.
-        """
+        # A maximized window can fit a saved share that was temporarily below
+        # the previous window's minimum. Reset the old ranges before restoring it.
+        self._pane_percent_lock = True
+        try:
+            for spin, value in zip(self._pane_spins.values(), values):
+                spin.setRange(0, 100)
+                spin.setValue(value)
+        finally:
+            self._pane_percent_lock = False
+
+    def _seed_pane_spins_from_live(self) -> None:
+        """Initialize a layout that has no saved shares yet."""
         spins = getattr(self, "_pane_spins", None)
         if not spins:
             return
@@ -3967,18 +3991,21 @@ class SettingsDialog(SteempegDialog):
         baseline = getattr(self, "_pane_percent_baseline", None)
         if baseline is None:
             baseline = load_shell_pane_percents(prev)
-        loaded = getattr(self, "_pane_percent_loaded", None)
-        if loaded is None:
-            loaded = baseline
         pane_percents = self._shell_pane_percent_values()
-        shown = tuple(int(v) for v in pane_percents)
-        percents_changed = shown != tuple(int(v) for v in baseline) or shown != tuple(
-            int(v) for v in loaded
-        )
+        percents_changed = pane_percents != baseline
+        queue_changed = pane_percents[2] != baseline[2]
+        if percents_changed and self._pane_queue_is_hover():
+            # The floating queue's width is independent. An edit to one side
+            # must not save the other side's temporary minimum-width clamp.
+            previous = read_shell_pane_percents(prev)
+            if previous is not None and load_queue_hover(prev):
+                pair = previous[:2] if pane_percents[:2] == baseline[:2] else pane_percents[:2]
+                queue = previous[2] if pane_percents[2] == baseline[2] else pane_percents[2]
+                pane_percents = (*pair, queue)
         if hide_handles and percents_changed:
             pending[KEY_SHELL_PANE_PERCENTS] = list(pane_percents)
             win_w, shell_w = self._shell_pane_measure()
-            if win_w > 0 and shell_w > 0 and int(baseline[2]) != int(pane_percents[2]):
+            if win_w > 0 and shell_w > 0 and queue_changed:
                 from steempeg.ui.layout_defaults import (
                     fit_shell_pane_pixels,
                     shell_percents_to_pixels,
@@ -4043,6 +4070,8 @@ class SettingsDialog(SteempegDialog):
 
         merged = dict(prev)
         merged.update(pending)
+        if self._settings_snapshot is not None:
+            self._settings_snapshot.record_save(prev, pending)
         try:
             configure_runtime_prefs(merged)
         except Exception:
@@ -4139,6 +4168,9 @@ class _SettingsSnapshot(dict):
 
     def __init__(self, settings: dict):
         super().__init__(deepcopy(settings))
+        # Form builders migrate a few legacy values in place. Compare against
+        # the original input so that normalization alone cannot invalidate it.
+        self._original = deepcopy(settings)
         self.read_keys = set()
 
     def get(self, key, default=None):
@@ -4155,15 +4187,20 @@ class _SettingsSnapshot(dict):
 
     def matches(self, current: dict) -> bool:
         # Some preference loaders replace an empty dict with their defaults.
-        if not self:
+        if not self._original:
             return not current
         missing = object()
-        return all(dict.get(self, key, missing) == current.get(key, missing)
+        return all(self._original.get(key, missing) == current.get(key, missing)
                    for key in self.read_keys)
+
+    def record_save(self, previous: dict, updates: dict) -> None:
+        """Keep a form current for its own writes, but invalidate external edits."""
+        if self.matches(previous):
+            self._original.update(deepcopy(updates))
 
 
 class _SettingsWarmup(QObject):
-    """Own one hidden form until it is opened; replenish it after the modal closes."""
+    """Prepare and retain one stock Settings form when it still matches saved preferences."""
 
     _INPUT_EVENTS = frozenset((QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress,
                                QEvent.Type.KeyPress, QEvent.Type.Wheel, QEvent.Type.TouchUpdate))
@@ -4265,35 +4302,65 @@ class _SettingsWarmup(QObject):
                 if self.snapshot.matches(current):
                     dialog = self.dialog
                     dialog.refresh_before_opening()
-                    self.dialog = self.snapshot = self.context = None
+                    self.dialog = None
                     return dialog
         except Exception:
             logging.exception("Could not open prepared Settings; rebuilding")
         self._discard()
         return None
 
+    def build_for_opening(self, *, between_steps=None) -> SettingsDialog:
+        """Build a stock form now, optionally yielding to the startup splash."""
+        self.snapshot = _SettingsSnapshot(_load_settings(self.app))
+        self.context = self._context()
+        dialog = SettingsDialog(self.app, prepared_settings=self.snapshot)
+        while not dialog.prepare_next_step():
+            if between_steps is not None:
+                between_steps()
+        return dialog
 
-def schedule_settings_warmup(app) -> None:
-    if not isinstance(getattr(app, "ui", None), QWidget):
-        return
-    warmup = getattr(app, "_settings_warmup", None)
-    if warmup is None:
-        warmup = app._settings_warmup = _SettingsWarmup(app)
-    if warmup.dialog is None:
-        warmup.schedule()
+    def retain(self, dialog: SettingsDialog) -> bool:
+        """Cache a clean form only while its preferences and presentation still match."""
+        if (
+            self.snapshot is None
+            or dialog._form_has_unsaved_changes()
+            or self.context != self._context()
+            or not self.snapshot.matches(_load_settings(self.app))
+        ):
+            self.snapshot = self.context = None
+            return False
+        # Match the initial navigation on a fresh open. Do this while hidden.
+        tabs = dialog._settings_tabs
+        for index in range(tabs.count()):
+            tabs.widget(index).verticalScrollBar().setValue(0)
+        tabs.setCurrentIndex(0)
+        self.dialog = dialog
+        return True
+
+
+def prepare_settings_at_startup(app, *, between_steps=None) -> None:
+    """Build the hidden stock form before the main window accepts clicks."""
+    warmup = app._settings_warmup = _SettingsWarmup(app)
+    warmup.dialog = warmup.build_for_opening(between_steps=between_steps)
+    logging.info("Settings startup warmup: all pages ready")
 
 
 def show_settings_dialog(app, *, settings_layout: str | None = None) -> None:
     """Opens Settings modally; Dev passes ``settings_layout`` to preview the other frames."""
-    from PySide6.QtWidgets import QWidget
-
     from steempeg.ui.window_chrome import force_app_cursor_resync
     opened_at = time.perf_counter()
-    warmup = getattr(app, "_settings_warmup", None)
-    dlg = warmup.take() if warmup is not None and settings_layout is None else None
+    warmup = None
+    if settings_layout is None and isinstance(getattr(app, "ui", None), QWidget):
+        warmup = getattr(app, "_settings_warmup", None)
+        if warmup is None:
+            warmup = app._settings_warmup = _SettingsWarmup(app)
+    dlg = warmup.take() if warmup is not None else None
     prepared = dlg is not None
     if dlg is None:
-        dlg = SettingsDialog(app, parent=getattr(app, "ui", None), settings_layout=settings_layout)
+        if warmup is not None:
+            dlg = warmup.build_for_opening()
+        else:
+            dlg = SettingsDialog(app, parent=getattr(app, "ui", None), settings_layout=settings_layout)
     built_ms = (time.perf_counter() - opened_at) * 1000
     QTimer.singleShot(0, lambda: logging.info(
         "Settings opening: prepared=%s build_ms=%.1f first_ui_turn_ms=%.1f",
@@ -4342,33 +4409,15 @@ def show_settings_dialog(app, *, settings_layout: str | None = None) -> None:
             hide_deck_focus_ring(app)
         except Exception:
             pass
-        # Modal buttons keep PointingHand on the cursor stack until destroyed.
-        # Strip them now, then resync after deleteLater so Qt re-queries a live widget.
-        try:
-            for w in dlg.findChildren(QWidget):
-                try:
-                    if hasattr(w, "_set_hovered"):
-                        w._set_hovered(False)
-                    w.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, False)
-                    w.unsetCursor()
-                except RuntimeError:
-                    pass
-            dlg.unsetCursor()
-        except RuntimeError:
-            pass
         tb = getattr(getattr(app, "ui", None), "title_bar", None)
         if tb is not None and hasattr(tb, "clear_shell_tool_hover"):
             tb.clear_shell_tool_hover()
         else:
             force_app_cursor_resync()
-        try:
+        if warmup is None or not warmup.retain(dlg):
             dlg.deleteLater()
-        except RuntimeError:
-            pass
-        QTimer.singleShot(0, force_app_cursor_resync)
-        QTimer.singleShot(50, force_app_cursor_resync)
-        if settings_layout is None:
-            schedule_settings_warmup(app)
+            if warmup is not None:
+                warmup.schedule()
 
 
 def maybe_show_small_screen_warning(app, ui_shell: str | None = None) -> None:

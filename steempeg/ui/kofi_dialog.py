@@ -10,7 +10,6 @@ from functools import lru_cache
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QIcon, QPainterPath, QPalette, QPixmap
 from PySide6.QtWidgets import (
-    QApplication,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -317,55 +316,30 @@ def _cozy_stylesheet(*, support_font: str) -> str:
 """
 
 
-def schedule_kofi_warmup(app) -> None:
-    """Prepare the hidden card on the Qt thread once startup has settled."""
-    from steempeg.ui.settings_prefs import load_hide_kofi
-    from steempeg.ui.startup_metrics import _BUSY
-
-    def prepare():
-        if not app.ui.isVisible() or load_hide_kofi(app.load_user_settings()):
-            return
-        startup = getattr(app, "_startup_measurement", None)
-        settings_timer = getattr(getattr(app, "_settings_warmup", None), "timer", None)
-        if (
-            (startup is not None and startup.result is None)
-            or (settings_timer is not None and settings_timer.isActive())
-            or any(getattr(app, key, False) for key in _BUSY)
-            or QApplication.activeModalWidget() is not None
-            or QApplication.mouseButtons() != Qt.MouseButton.NoButton
-            or getattr(app, "_is_switching", False)
-        ):
-            QTimer.singleShot(250, app.ui, prepare)
-            return
-        try:
-            prepare_kofi_dialog(app.ui)
-        except Exception:
-            logging.exception("Ko-fi warmup failed; normal opening remains available")
-
-    QTimer.singleShot(500, app.ui, prepare)
-
-
 def prepare_kofi_dialog(parent=None) -> QDialog:
     """Cache a polished, unmapped Donate Me card for this parent and size."""
     from steempeg.ui.ui_density import scaled_dialog_size
 
     size = scaled_dialog_size(420, 430, parent=parent)
-    if parent is None:
-        return _build_kofi_dialog(parent, size)
     dialog = parent.findChild(
         QDialog, "SteempegKofiDialog", Qt.FindChildOption.FindDirectChildrenOnly
-    )
-    if dialog is not None:
-        if dialog.isVisible() or dialog._kofi_design_size == size:
-            return dialog
-        dialog.setObjectName("")
-        dialog.deleteLater()
-    dialog = _build_kofi_dialog(parent, size)
-    dialog._kofi_design_size = size
+    ) if parent is not None else None
+    if dialog is None:
+        dialog = _build_kofi_dialog(parent)
+    if not dialog.isVisible() and getattr(dialog, "_kofi_design_size", None) != size:
+        width, height = size
+        if sys.platform != "win32":
+            # Linux fonts need more vertical space than the Windows design size.
+            dialog.setFixedWidth(width)
+            dialog.layout().activate()
+            height = dialog.sizeHint().height()
+        dialog.setFixedSize(width, height)
+        dialog.layout().activate()
+        dialog._kofi_design_size = size
     return dialog
 
 
-def _build_kofi_dialog(parent, size: tuple[int, int]) -> QDialog:
+def _build_kofi_dialog(parent) -> QDialog:
     from steempeg.services.kofi_remote import display_kofi_host, resolve_kofi_url
     from steempeg.ui.icon_assets import load_pixmap
     from steempeg.ui.icon_utils import apply_square_icon
@@ -378,15 +352,6 @@ def _build_kofi_dialog(parent, size: tuple[int, int]) -> QDialog:
     # Rounded cream plate paints itself; dialog stays clear so corners aren't square.
     dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-    # Linux font metrics are taller than this card. A fixed 430px box was
-    # crushing the 128px cup below its minimum, so "Donate Me!" sat on the disc.
-    # Height is applied after the layout exists. Windows already fits.
-    kofi_w, kofi_h = size
-    linux = sys.platform != "win32"
-    if linux:
-        dialog.setFixedWidth(kofi_w)
-    else:
-        dialog.setFixedSize(kofi_w, kofi_h)
     dialog.setStyleSheet(_cozy_stylesheet(support_font=fredoka))
 
     shell = QVBoxLayout(dialog)
@@ -509,10 +474,6 @@ def _build_kofi_dialog(parent, size: tuple[int, int]) -> QDialog:
     plate_lay.addLayout(close_row)
 
     dialog.ensurePolished()
-    shell.activate()
-    if linux:
-        hint = dialog.sizeHint()
-        dialog.setFixedSize(dialog.width(), hint.height())
     return dialog
 
 
