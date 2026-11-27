@@ -1,7 +1,23 @@
 {
+  "60": {
+    "label": "Interface scale and Express Player",
+    "detail": "50–150% interface scale, updated Express playback and export controls, performance improvements, and bug fixes."
+  },
+  "59": {
+    "label": "Library and player performance",
+    "detail": "Smoother library scans, faster clip switching, and more responsive playback controls."
+  },
+  "56": {
+    "label": "Changelog on GitHub Pages",
+    "detail": "A browsable changelog on the website, with release notes shared with Update Center."
+  },
   "55": {
     "label": "Installer and Express",
     "detail": "Per-user Windows installer; tray background with a new-clip popup; Express player and Express render."
+  },
+  "54": {
+    "label": "Advanced Steempeg PRO encoding",
+    "detail": "Encoder presets, tune and keyframe controls, saved PRO settings, and constant-quality file size estimates."
   },
   "53": {
     "label": "Smart Deletor",
