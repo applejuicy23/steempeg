@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QHBoxLayout, QMenu, QPushButton
 from steempeg.render.queue import JobStatus, RenderJob
 from steempeg.render.queue_display import format_job_output
 from steempeg.ui import ui_theme as ut
+from steempeg.ui.icon_utils import app_window_icon
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.play_video_button import PlayVideoSplitButton
 from steempeg.ui.render_result_widgets import ExportResultCard, ResultHeader
@@ -116,7 +117,8 @@ class RenderCompleteDialog(SteempegDialog):
 
         menu = QMenu(self)
         menu.setStyleSheet(ut.library_menu_stylesheet())
-        action_steempeg = menu.addAction("Open in Steempeg")
+        action_steempeg = menu.addAction(app_window_icon(), "Open in Steempeg")
+        action_steempeg.setIconVisibleInMenu(True)
         action_steempeg.setToolTip(
             "Open the Rendered videos tab and preview this export in Steempeg."
         )
