@@ -1,6 +1,8 @@
 """Shared QComboBox popup styling — selected item outline + visible disabled rows."""
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QComboBox, QStyledItemDelegate
@@ -75,6 +77,7 @@ def install_wide_contents_combo_popup(combo: QComboBox | None) -> None:
 # on our dark custom popup (QSS alone is not always enough).
 _POPUP_FG = tok.TEXT_TITLE  # #e8e8e8
 _SECTION_FG = QColor("#b29ae7")  # Presets tab Standard / Custom caption
+_LINUX_LIST_POPUP_RULE = "QComboBox { combobox-popup: 0; }"
 
 
 class QualitySectionHeaderDelegate(QStyledItemDelegate):
@@ -191,13 +194,23 @@ def apply_dark_combo_popup(
     (popup HWND often ignores ancestor dialog QSS) and overrides the view palette
     so OS light Text / WindowText cannot paint black on dark rows.
     """
-    current = combo.styleSheet() or ""
-    if "QAbstractItemView" not in current:
-        combo.setStyleSheet(current + combo_popup_item_rules(dense))
+    current = combo.styleSheet()
+    rules = current
+    if "QAbstractItemView" not in rules:
+        rules += combo_popup_item_rules(dense)
+    # Fusion's menu popup paints its own frame/margins around the themed view.
+    use_linux_list = sys.platform.startswith("linux")
+    if use_linux_list and _LINUX_LIST_POPUP_RULE not in rules:
+        rules += "\n" + _LINUX_LIST_POPUP_RULE
+    if rules != current:
+        combo.setStyleSheet(rules)
 
     view = combo.view()
     if view is None:
         return
+    if use_linux_list and view.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff:
+        # A view created in menu mode may still have its scrollbar turned off.
+        view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
     c = _combo_colors()
     bg = QColor(c.popup_bg)
