@@ -1,3 +1,10 @@
 {
-  "notices": []
+  "notices": [
+    {
+      "id": "v60-welcome",
+      "versions": ["60"],
+      "title": "Welcome to Steempeg v60!",
+      "message": "Thanks for installing Steempeg v60! :3"
+    }
+  ]
 }
