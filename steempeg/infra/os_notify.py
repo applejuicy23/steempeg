@@ -5,9 +5,9 @@ Windows: WinRT ``ToastNotification`` via a short PowerShell helper. Qt's
 Center on Win10/11.
 
 Important: an unpackaged AUMID only shows banners / a branded taskbar icon if
-Windows has a Start Menu shortcut for that ID. Frozen builds bind the real
-``.exe``; **dev runs** (``python.exe`` / Code Runner) bind ``python`` +
-``steempeg/app.py`` with ``logo.ico`` so the taskbar is not a blank white file.
+Windows has a Start Menu shortcut for that ID. Prefer the installed copy, so
+portable builds and source runs cannot redirect its Start Menu shortcut.
+Without an installation, use the executable or source entry point.
 When no shortcut can be registered, toasts fall back to the PowerShell host AUMID.
 """
 from __future__ import annotations
@@ -130,14 +130,15 @@ def _toast_exe_candidate() -> str | None:
 
 
 def _shortcut_launch_target() -> tuple[str, str, str] | None:
-    """``(target, arguments, workdir)`` for the Start Menu AUMID shortcut.
-
-    Frozen builds bind the real Steempeg ``.exe``. Dev runs (``python.exe`` /
-    Code Runner) bind ``sys.executable`` + ``steempeg/app.py`` with ``logo.ico``
-    so the taskbar matches the live process — not a blank document face.
-    """
+    """``(target, arguments, workdir)`` for the Start Menu AUMID shortcut."""
     if sys.platform != "win32":
         return None
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        installed = Path(local_app_data) / "Programs" / "Steempeg" / "Steempeg.exe"
+        if installed.is_file():
+            return str(installed), "", str(installed.parent)
+
     exe = _toast_exe_candidate()
     if exe:
         return exe, "", str(Path(exe).parent)
@@ -176,11 +177,16 @@ def ensure_steempeg_aumid_shortcut(*, force: bool = False) -> bool:
     if launch is None:
         return False
     target, arguments, workdir = launch
-    icon = get_resource_path("logo.ico")
-    if not icon or not os.path.isfile(icon):
-        icon = get_resource_path("logo.png")
-    if not icon or not os.path.isfile(icon):
-        icon = target
+    root = Path(workdir)
+    icon = next(
+        (candidate for candidate in (
+            root / "assets" / "logo.ico",
+            root / "_internal" / "assets" / "logo.ico",
+            root / "assets" / "logo.png",
+            root / "_internal" / "assets" / "logo.png",
+        ) if candidate.is_file()),
+        target,
+    )
     try:
         programs = (
             Path(os.environ.get("APPDATA", ""))
@@ -270,7 +276,7 @@ Add-Type -TypeDefinition $code -Language CSharp
         }
         if sys.platform == "win32":
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-        subprocess.run(**kwargs, timeout=20)
+        subprocess.run(**kwargs, timeout=20, check=True)
         _shortcut_ready = lnk_path.is_file()
         if _shortcut_ready:
             _log.info(
